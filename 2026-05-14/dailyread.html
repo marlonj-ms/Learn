@@ -1,0 +1,969 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>C# Daily Read — Lambda / Delegate / LINQ</title>
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+    max-width: 900px;
+    margin: 40px auto;
+    padding: 0 24px 80px;
+    line-height: 1.7;
+    color: #1f2328;
+    background: #fbfbfb;
+  }
+  h1 {
+    border-bottom: 3px solid #0969da;
+    padding-bottom: 12px;
+    color: #0969da;
+  }
+  h2 {
+    border-left: 5px solid #0969da;
+    padding-left: 12px;
+    margin-top: 48px;
+    color: #1f2328;
+  }
+  h3 {
+    color: #24292f;
+    margin-top: 28px;
+  }
+  code {
+    background: #eef2f6;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-family: "Consolas", "Cascadia Code", "Courier New", monospace;
+    font-size: 0.95em;
+    color: #cf222e;
+  }
+  pre {
+    background: #1f2328;
+    color: #e6edf3;
+    padding: 16px 18px;
+    border-radius: 8px;
+    overflow-x: auto;
+    font-family: "Consolas", "Cascadia Code", "Courier New", monospace;
+    font-size: 0.9em;
+    line-height: 1.55;
+  }
+  pre code {
+    background: none;
+    color: inherit;
+    padding: 0;
+    font-size: inherit;
+  }
+  .ok    { color: #1a7f37; font-weight: 600; }
+  .bad   { color: #cf222e; font-weight: 600; }
+  .note  {
+    background: #fff8c5;
+    border-left: 4px solid #d4a72c;
+    padding: 12px 16px;
+    margin: 16px 0;
+    border-radius: 4px;
+  }
+  .key   {
+    background: #ddf4ff;
+    border-left: 4px solid #0969da;
+    padding: 12px 16px;
+    margin: 16px 0;
+    border-radius: 4px;
+  }
+  .danger {
+    background: #ffebe9;
+    border-left: 4px solid #cf222e;
+    padding: 12px 16px;
+    margin: 16px 0;
+    border-radius: 4px;
+  }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 16px 0;
+  }
+  th, td {
+    border: 1px solid #d0d7de;
+    padding: 10px 14px;
+    text-align: left;
+    vertical-align: top;
+  }
+  th {
+    background: #f6f8fa;
+  }
+  .ascii {
+    background: #f6f8fa;
+    color: #1f2328;
+    border: 1px solid #d0d7de;
+  }
+  .toc {
+    background: #f6f8fa;
+    border: 1px solid #d0d7de;
+    padding: 16px 24px;
+    border-radius: 8px;
+    margin-bottom: 32px;
+  }
+  .toc ol { margin: 0; padding-left: 22px; }
+  .toc li { margin: 4px 0; }
+  a { color: #0969da; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .meta {
+    color: #57606a;
+    font-size: 0.9em;
+  }
+</style>
+</head>
+<body>
+
+<h1>C# Daily Read — Lambda / Delegate / LINQ</h1>
+<p class="meta">生成日期：2026-05-14 &nbsp;|&nbsp; 用于每日温习</p>
+
+<div class="toc">
+<strong>目录</strong>
+<ol>
+  <li><a href="#sec1">Lambda 表达式（Lambda Expression）</a></li>
+  <li><a href="#sec2">委托（Delegate）的本质</a></li>
+  <li><a href="#sec3">Func / Action / Predicate</a></li>
+  <li><a href="#sec4">方法组（Method Group） vs 调用方法</a></li>
+  <li><a href="#sec5">自定义 delegate 关键字</a></li>
+  <li><a href="#sec6">LINQ 与 Lambda / Delegate 的关系</a></li>
+  <li><a href="#sec7">Where vs Select 的形状</a></li>
+  <li><a href="#sec8">为什么委托设计强大（Open/Closed Principle）</a></li>
+  <li><a href="#sec9">常见陷阱与 var 规则</a></li>
+  <li><a href="#sec10">小测练习与答案</a></li>
+  <li><a href="#sec11">Console.WriteLine 集合陷阱</a></li>
+  <li><a href="#sec12">延迟执行（Deferred Execution）</a></li>
+  <li><a href="#sec13">流式 vs 非流式（Streaming vs Buffering）</a></li>
+  <li><a href="#sec14">Take 位置决定上游做多少无用功</a></li>
+  <li><a href="#sec15">方法参数立即求值 vs Lambda 延迟执行</a></li>
+  <li><a href="#sec16">上游执行次数 ≥ 下游执行次数</a></li>
+  <li><a href="#sec17_why">为什么要传方法而不是直接调用？</a></li>
+  <li><a href="#sec17">核心一句话总结</a></li>
+</ol>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec1">1. Lambda 表达式（Lambda Expression）</h2>
+
+<p>Lambda 是一段匿名（没有方法名）的方法行为。</p>
+
+<pre><code>number =&gt; number * 10</code></pre>
+
+<p>意思：</p>
+<pre class="ascii"><code>输入 number  →  返回 number * 10</code></pre>
+
+<p>等价的普通方法：</p>
+<pre><code>int TimesTen(int number)
+{
+    return number * 10;
+}</code></pre>
+
+<div class="key">
+<strong>关键认知：</strong>
+<ul>
+  <li>Lambda 本身<strong>没有独立的类型</strong>。</li>
+  <li>它必须被一个<strong>委托类型（delegate type）</strong>承载，才能存在并被调用。</li>
+  <li>承载它的"容器"可以是：
+    <ol>
+      <li>一个显式的委托变量（如 <code>Func&lt;int,int&gt; x = ...</code>）</li>
+      <li>一个方法参数的类型（如 <code>Where</code> 的 <code>Func&lt;T,bool&gt;</code> 参数）</li>
+    </ol>
+  </li>
+</ul>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec2">2. 委托（Delegate）的本质</h2>
+
+<p><strong>委托（delegate）</strong> = 一个能"装住方法"的类型，可以把方法当变量传递、存储、调用。</p>
+
+<pre><code>int Triple(int number)
+{
+    return number * 3;
+}
+
+Func&lt;int, int&gt; operation = Triple;   // 把方法装进委托变量
+Console.WriteLine(operation(5));      // 调用，输出 15</code></pre>
+
+<p>内存示意：</p>
+<pre class="ascii"><code>operation ──&gt; (delegate instance) ──&gt; Triple 方法的代码</code></pre>
+
+<div class="key">
+<strong>委托存的是什么？</strong>
+<ul>
+  <li>✅ 一个指向方法的<strong>引用</strong></li>
+  <li>❌ 不是方法执行的结果</li>
+  <li>❌ 不是方法代码的副本</li>
+</ul>
+<p>类比：<code>operation</code> 像遥控器，它不装电视，但能控制电视。</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec3">3. Func / Action / Predicate</h2>
+
+<p>这三个是 C# 内置的常用<strong>泛型委托类型</strong>。</p>
+
+<table>
+  <thead>
+    <tr><th>委托类型</th><th>用途</th><th>返回值</th><th>形状示例</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>Func&lt;T, TResult&gt;</code></td>
+      <td>有返回值的方法</td>
+      <td>有</td>
+      <td><code>int → int</code></td>
+    </tr>
+    <tr>
+      <td><code>Action&lt;T&gt;</code></td>
+      <td>无返回值的方法</td>
+      <td>void</td>
+      <td><code>string → void</code></td>
+    </tr>
+    <tr>
+      <td><code>Predicate&lt;T&gt;</code></td>
+      <td>判断真假</td>
+      <td>bool</td>
+      <td><code>T → bool</code></td>
+    </tr>
+  </tbody>
+</table>
+
+<pre><code>Func&lt;int, int&gt;     timesTen   = number =&gt; number * 10;
+Func&lt;string, int&gt;  getLength  = name   =&gt; name.Length;
+Func&lt;int, bool&gt;    isEven     = number =&gt; number % 2 == 0;
+Action&lt;string&gt;     log        = message =&gt; Console.WriteLine(message);
+Predicate&lt;string&gt;  startsA    = name =&gt; name.StartsWith("A");</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="sec4">4. 方法组（Method Group） vs 调用方法</h2>
+
+<p>这是最容易混淆的点之一。</p>
+
+<pre><code>int AddOne(int number)
+{
+    return number + 1;
+}
+
+Func&lt;int, int&gt; a = AddOne;       // ✅ 传入方法本身（method group）
+Func&lt;int, int&gt; b = AddOne(5);    // ❌ 编译错误：把 int 6 赋给 Func</code></pre>
+
+<table>
+  <thead>
+    <tr><th>写法</th><th>含义</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>AddOne</code></td><td>方法本身（一段行为）</td></tr>
+    <tr><td><code>AddOne(5)</code></td><td>调用方法，得到结果 <code>int 6</code></td></tr>
+  </tbody>
+</table>
+
+<p>LINQ 中的同类陷阱：</p>
+<pre><code>numbers.Select(TimesTen);       // ✅ 把方法传给 Select
+numbers.Select(TimesTen(5));    // ❌ 传的是 int 50，不是方法</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="sec5">5. 自定义 delegate 关键字</h2>
+
+<p>除了 <code>Func</code> / <code>Action</code> / <code>Predicate</code>，C# 还允许自定义委托类型，给委托一个有意义的名字。</p>
+
+<pre><code>public delegate decimal DiscountRule(decimal originalPrice);
+
+decimal ApplyDiscount(decimal price, DiscountRule rule)
+{
+    return rule(price);
+}
+
+DiscountRule tenPercentOff = price =&gt; price * 0.9m;
+DiscountRule flatTwentyOff = price =&gt; price - 20m;
+
+Console.WriteLine(ApplyDiscount(100m, tenPercentOff));  // 90
+Console.WriteLine(ApplyDiscount(100m, flatTwentyOff));  // 80</code></pre>
+
+<div class="note">
+<strong>什么时候用 Func，什么时候用自定义 delegate？</strong>
+<ul>
+  <li>99% 情况使用 <code>Func</code> / <code>Action</code> / <code>Predicate</code></li>
+  <li>当"名字本身能解释意图"时，用自定义 delegate（如 <code>DiscountRule</code>、<code>ValidationRule</code>、<code>Logger</code>）</li>
+  <li>事件（event）几乎总是基于自定义 delegate</li>
+</ul>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec6">6. LINQ 与 Lambda / Delegate 的关系</h2>
+
+<div class="danger">
+<strong>容易出错的认知：</strong><br>
+"LINQ 和 lambda 无关" ❌ 错。<br>
+LINQ 几乎完全依赖委托和 lambda。
+</div>
+
+<p><code>Where</code> 的真实签名（简化版）：</p>
+<pre><code>IEnumerable&lt;T&gt; Where&lt;T&gt;(
+    this IEnumerable&lt;T&gt; source,
+    Func&lt;T, bool&gt; predicate)        // ← 参数类型是委托类型</code></pre>
+
+<p><code>Select</code> 的真实签名（简化版）：</p>
+<pre><code>IEnumerable&lt;TResult&gt; Select&lt;T, TResult&gt;(
+    this IEnumerable&lt;T&gt; source,
+    Func&lt;T, TResult&gt; selector)      // ← 参数类型是委托类型</code></pre>
+
+<p>所以当你写：</p>
+<pre><code>numbers.Where(n =&gt; n &gt; 3);</code></pre>
+
+<p>编译器在做的事：</p>
+<pre class="ascii"><code>1. 看到 lambda：n =&gt; n &gt; 3
+2. 看到 Where 的第二参数类型是 Func&lt;int, bool&gt;
+3. 把 lambda 编译成 Func&lt;int, bool&gt; 委托实例
+4. 把这个委托实例传给 Where
+5. Where 循环 numbers，对每个元素调用委托，根据 bool 决定保留与否</code></pre>
+
+<p>整体流程图：</p>
+<pre class="ascii"><code>你写：    n =&gt; n * 10               (lambda 行为)
+              │
+              ▼
+存入：    Func&lt;int, int&gt;            (委托类型)
+              │
+              ▼
+传给：    numbers.Select(...)        (LINQ 方法)
+              │
+              ▼
+得到：    IEnumerable&lt;int&gt;           (新集合)</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="sec7">7. Where vs Select 的形状</h2>
+
+<table>
+  <thead>
+    <tr><th>方法</th><th>用途</th><th>Lambda 形状</th><th>返回什么</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>Where</code></td>
+      <td>过滤（filter）</td>
+      <td><code>T → bool</code></td>
+      <td>原元素中满足条件的子集</td>
+    </tr>
+    <tr>
+      <td><code>Select</code></td>
+      <td>转换（transform）</td>
+      <td><code>T → 任意类型</code></td>
+      <td>转换后的新元素</td>
+    </tr>
+  </tbody>
+</table>
+
+<pre><code>// Where 必须返回 bool
+numbers.Where(n =&gt; n &gt; 3);          // ✅
+numbers.Where(n =&gt; n + 1);          // ❌ 返回 int，不是 bool
+
+// Select 接受任意返回类型
+numbers.Select(n =&gt; n * 10);        // int -&gt; int    ✅
+numbers.Select(n =&gt; n.ToString());  // int -&gt; string ✅
+numbers.Select(n =&gt; n &gt; 3);         // int -&gt; bool   ✅（合法但少见）</code></pre>
+
+<div class="key">
+<strong>记忆口诀：</strong>
+<ul>
+  <li><code>Where</code> 在问：<em>"我要不要这个元素？"</em>（答案必须是 true/false）</li>
+  <li><code>Select</code> 在问：<em>"这个元素要变成什么？"</em>（答案可以是任何东西）</li>
+</ul>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec8">8. 为什么委托设计强大（Open/Closed Principle）</h2>
+
+<p>对比两种写死和可扩展的设计：</p>
+
+<h3>❌ 写死的版本</h3>
+<pre><code>void DoWork()
+{
+    Console.WriteLine("Starting work");
+    // ... 工作内容 ...
+    Console.WriteLine("Work done");
+}</code></pre>
+<p><span class="bad">问题：</span>如果想换成文件日志、数据库日志、单元测试中静默，都得修改 DoWork 本身。</p>
+
+<h3>✅ 委托注入的版本</h3>
+<pre><code>public delegate void Logger(string message);
+
+void DoWork(Logger log)
+{
+    log("Starting work");
+    // ... 工作内容 ...
+    log("Work done");
+}
+
+Logger consoleLogger = m =&gt; Console.WriteLine($"[CONSOLE] {m}");
+Logger fileLogger    = m =&gt; File.AppendAllText("log.txt", m + "\n");
+Logger silentLogger  = m =&gt; { };  // 单元测试用
+
+DoWork(consoleLogger);
+DoWork(fileLogger);
+DoWork(silentLogger);</code></pre>
+
+<div class="key">
+<strong>开闭原则（Open/Closed Principle, OCP）：</strong>
+<ul>
+  <li><strong>对扩展开放</strong>：随时添加新的 <code>Logger</code> 实现</li>
+  <li><strong>对修改关闭</strong>：从此不需要再改 <code>DoWork</code></li>
+</ul>
+<p>这是 SOLID 原则中的 "O"，也是依赖注入、策略模式（Strategy Pattern）的基础。</p>
+</div>
+
+<h3>验证规则的可组合性</h3>
+<pre><code>public delegate bool ValidationRule(string input);
+
+ValidationRule notEmpty    = text =&gt; !string.IsNullOrWhiteSpace(text);
+ValidationRule isEmail     = text =&gt; text.Contains("@");
+ValidationRule biggerThan8 = text =&gt; text.Length &gt;= 8;
+
+// 组合规则
+ValidationRule emailAndLongEnough = text =&gt;
+    notEmpty(text) &amp;&amp; isEmail(text) &amp;&amp; biggerThan8(text);</code></pre>
+
+<p>这就是生产环境中 <strong>FluentValidation</strong> 等库的底层思路。</p>
+
+<!-- ============================================================ -->
+<h2 id="sec9">9. 常见陷阱与 var 规则</h2>
+
+<table>
+  <thead>
+    <tr><th>写法</th><th>结果</th><th>原因</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>var x = n =&gt; n + 1;</code></td>
+      <td class="bad">❌ 编译错误</td>
+      <td>var 无法从 lambda 推断类型，lambda 本身没有类型</td>
+    </tr>
+    <tr>
+      <td><code>Func&lt;int,int&gt; x = n =&gt; n + 1;</code></td>
+      <td class="ok">✅ 合法</td>
+      <td>显式委托类型承载 lambda</td>
+    </tr>
+    <tr>
+      <td><code>var c = numbers.Where(n =&gt; n &gt; 1);</code></td>
+      <td class="ok">✅ 合法</td>
+      <td>var 推断的是 Where 的返回值（IEnumerable&lt;int&gt;），不是 lambda</td>
+    </tr>
+    <tr>
+      <td><code>numbers.Where(n =&gt; n + 1);</code></td>
+      <td class="bad">❌ 编译错误</td>
+      <td>Where 需要返回 bool，但 lambda 返回 int</td>
+    </tr>
+    <tr>
+      <td><code>numbers.Select(TimesTen(5));</code></td>
+      <td class="bad">❌ 编译错误</td>
+      <td>传入的是结果 int，不是方法</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="note">
+<strong>口诀：</strong> var 不能装 lambda，但可以装"调用结果"。
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec10">10. 小测练习与答案</h2>
+
+<p>每天看完后建议蒙住答案，自测一遍。</p>
+
+<h3>练习</h3>
+<pre><code>// 行 1
+Func&lt;int, int&gt; a = n =&gt; n + 1;
+
+// 行 2
+var b = n =&gt; n + 1;
+
+// 行 3
+List&lt;int&gt; numbers = new() { 1, 2, 3 };
+numbers.Where(n =&gt; n &gt; 1);
+
+// 行 4
+var c = numbers.Where(n =&gt; n &gt; 1);
+
+// 行 5
+Func&lt;int, bool&gt; rule = n =&gt; n &gt; 1;
+numbers.Where(rule);
+
+// 行 6
+numbers.Where(n =&gt; n + 1);</code></pre>
+
+<h3>答案</h3>
+<table>
+  <thead>
+    <tr><th>行</th><th>结果</th><th>原因</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>1</td><td class="ok">✅</td><td>显式委托类型，形状 int → int 匹配</td></tr>
+    <tr><td>2</td><td class="bad">❌</td><td>var 不能从 lambda 推断类型</td></tr>
+    <tr><td>3</td><td class="ok">✅</td><td>Where 期望 Func&lt;int,bool&gt;，n &gt; 1 返回 bool</td></tr>
+    <tr><td>4</td><td class="ok">✅</td><td>var 推断的是 Where 的返回值 IEnumerable&lt;int&gt;</td></tr>
+    <tr><td>5</td><td class="ok">✅</td><td>先装进委托变量再传给 Where，完全合法</td></tr>
+    <tr><td>6</td><td class="bad">❌</td><td>n + 1 返回 int，不是 bool；这种用法应该给 Select</td></tr>
+  </tbody>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="sec11">11. Console.WriteLine 集合陷阱</h2>
+
+<p>下面这段代码<strong>不会报错</strong>，但输出可能让你怀疑人生：</p>
+
+<pre><code>List&lt;int&gt; numbers = new() { 1, 2, 3 };
+var result = numbers.Where(x =&gt; x &gt; 1);
+Console.WriteLine(result);</code></pre>
+
+<p>实际输出：</p>
+<pre class="ascii"><code>System.Linq.Enumerable+WhereListIterator`1[System.Int32]</code></pre>
+
+<div class="danger">
+<strong>为什么不报错？</strong>
+<ul>
+  <li><code>Console.WriteLine</code> 有一个重载接受 <code>object?</code>，任何类型都能传入</li>
+  <li>编译合法，运行不抛异常</li>
+  <li>但它会调用对象的 <code>ToString()</code>，而 LINQ 迭代器没有重写 <code>ToString()</code></li>
+  <li>所以打印出来的是<strong>类型全名</strong>，不是集合内容</li>
+</ul>
+</div>
+
+<h3>正确打印集合内容的 3 种方式</h3>
+<pre><code>// 方式 1：foreach（最显式）
+foreach (int n in result)
+{
+    Console.WriteLine(n);
+}
+
+// 方式 2：string.Join（最常用）
+Console.WriteLine(string.Join(", ", result));   // 输出: 2, 3
+
+// 方式 3：先 ToList 再观察（调试常用）
+List&lt;int&gt; materialized = result.ToList();</code></pre>
+
+<div class="key">
+<strong>口诀：</strong> 集合不能直接 <code>WriteLine</code>，要么 <code>foreach</code>，要么 <code>string.Join</code>。
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec12">12. 延迟执行（Deferred Execution）</h2>
+
+<p>LINQ 链式调用<strong>本身不执行任何工作</strong>。它只是建立一份"配方"，等"消费者"触发时才工作。</p>
+
+<pre><code>List&lt;int&gt; numbers = new() { 1, 2, 3 };
+
+var result = numbers.Select(n =&gt;
+{
+    Console.WriteLine($"processing {n}");
+    return n * 10;
+});
+
+Console.WriteLine("--- before iteration ---");
+
+foreach (int x in result)
+{
+    Console.WriteLine($"got {x}");
+}</code></pre>
+
+<p>输出（注意顺序）：</p>
+<pre class="ascii"><code>--- before iteration ---
+processing 1
+got 10
+processing 2
+got 20
+processing 3
+got 30</code></pre>
+
+<div class="key">
+<strong>关键认知：</strong>
+<ul>
+  <li><code>var result = numbers.Select(...)</code> 这一行<strong>什么都没做</strong></li>
+  <li>只是建立"配方"，记住"想做什么"</li>
+  <li>触发执行的"消费者"包括：<code>foreach</code> / <code>ToList()</code> / <code>ToArray()</code> / <code>Count()</code> / <code>First()</code> / <code>Sum()</code></li>
+</ul>
+</div>
+
+<h3>延迟执行的真实陷阱</h3>
+<pre><code>List&lt;int&gt; numbers = new() { 1, 2, 3 };
+var result = numbers.Where(x =&gt; x &gt; 1);   // 配方，不执行
+
+numbers.Add(99);                            // 修改源
+
+foreach (int n in result)                   // 现在才执行
+{
+    Console.WriteLine(n);
+}
+// 输出：2, 3, 99    ← 99 也被纳入了！</code></pre>
+
+<p>因为 <code>result</code> 是在 foreach 时才"现去 numbers 拿数据过滤"，那时 99 已经在里面了。</p>
+
+<!-- ============================================================ -->
+<h2 id="sec13">13. 流式 vs 非流式（Streaming vs Buffering）</h2>
+
+<h3>流式（Streaming）— 一次拉一个</h3>
+
+<p>大部分 LINQ 方法是<strong>流式</strong>的：消费者要一个，它才处理一个。</p>
+
+<pre><code>List&lt;int&gt; numbers = new() { 1, 2, 3 };
+var streamed = numbers.Select(n =&gt; 
+{
+    Console.WriteLine($"select {n}");
+    return n * 10;
+});
+
+foreach (int x in streamed) Console.WriteLine($"got {x}");</code></pre>
+
+<p>输出：</p>
+<pre class="ascii"><code>select 1
+got 10
+select 2
+got 20
+select 3
+got 30</code></pre>
+
+<h3>非流式（Buffering）— 一次性吃完所有元素</h3>
+
+<p><code>OrderBy</code> / <code>GroupBy</code> / <code>Reverse</code> 必须先看完所有元素才能给出第一个结果。</p>
+
+<pre><code>var buffered = numbers.OrderByDescending(n =&gt; 
+{
+    Console.WriteLine($"order {n}");
+    return n;
+});
+
+foreach (int x in buffered) Console.WriteLine($"got {x}");</code></pre>
+
+<p>输出：</p>
+<pre class="ascii"><code>order 1
+order 2
+order 3        ← 所有元素都先被处理
+got 3
+got 2
+got 1          ← 然后才开始输出</code></pre>
+
+<h3>分类速查</h3>
+<table>
+  <thead>
+    <tr><th>方法</th><th>类型</th><th>说明</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>Where</code> / <code>Select</code></td><td class="ok">流式</td><td>每拉一个处理一个</td></tr>
+    <tr><td><code>Take</code> / <code>Skip</code></td><td class="ok">流式</td><td>按需拉取，达到数量停止</td></tr>
+    <tr><td><code>TakeWhile</code> / <code>SkipWhile</code></td><td class="ok">流式</td><td>条件满足时停止/开始</td></tr>
+    <tr><td><code>OrderBy</code> / <code>OrderByDescending</code></td><td class="bad">非流式</td><td>必须看完所有元素才能排序</td></tr>
+    <tr><td><code>GroupBy</code></td><td class="bad">非流式</td><td>必须看完所有元素才能分组</td></tr>
+    <tr><td><code>Reverse</code></td><td class="bad">非流式</td><td>必须看完所有元素才能反转</td></tr>
+    <tr><td><code>ToList</code> / <code>ToArray</code></td><td class="bad">非流式</td><td>立即触发并物化所有元素</td></tr>
+    <tr><td><code>Count</code> / <code>Sum</code> / <code>Min</code> / <code>Max</code></td><td class="bad">非流式</td><td>必须遍历所有元素</td></tr>
+    <tr><td><code>First</code> / <code>FirstOrDefault</code></td><td class="ok">流式</td><td>找到第一个就停止</td></tr>
+    <tr><td><code>Any</code> / <code>All</code></td><td class="ok">流式</td><td>可以提前退出</td></tr>
+  </tbody>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="sec14">14. Take 位置决定上游做多少无用功</h2>
+
+<p>三种写法，都是"过滤 + 转换 + 取 3 个"，但效率和正确性差距巨大。</p>
+
+<pre><code>// 写法 1：Where → Select → Take    ✅ 最优
+bigList.Where(n =&gt; n &gt; 10).Select(n =&gt; Expensive(n)).Take(3);
+
+// 写法 2：Select → Where → Take    ⚠️ 浪费
+bigList.Select(n =&gt; Expensive(n)).Where(n =&gt; n &gt; 10).Take(3);
+
+// 写法 3：Select → Take → Where    ❌ 语义错误
+bigList.Select(n =&gt; Expensive(n)).Take(3).Where(n =&gt; n &gt; 10);</code></pre>
+
+<table>
+  <thead>
+    <tr><th>写法</th><th>Expensive 调用次数</th><th>结果元素数</th><th>评价</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>1. Where → Select → Take</td><td>3</td><td>3</td><td class="ok">✅ 最优</td></tr>
+    <tr><td>2. Select → Where → Take</td><td>6+（取决于过滤率）</td><td>3</td><td class="bad">⚠️ 浪费</td></tr>
+    <tr><td>3. Select → Take → Where</td><td>3</td><td><strong>0</strong>（可能为空）</td><td class="bad">❌ 错误</td></tr>
+  </tbody>
+</table>
+
+<div class="key">
+<strong>黄金顺序：</strong>
+<pre class="ascii"><code>源 → Where（过滤）
+   → Select（转换）
+   → OrderBy / GroupBy（如需要）
+   → Take / Skip / First（截断）</code></pre>
+<p>口诀：<strong>先筛掉，再加工，再排序，最后截取。</strong></p>
+</div>
+
+<h3>Take 在前面的陷阱</h3>
+<pre><code>List&lt;int&gt; numbers = new() { 5, 3, 8, 1, 9 };
+
+var x = numbers.Take(3).Where(n =&gt; n &gt; 4);
+// Take(3) 先拿 {5, 3, 8}，再过滤 → {5, 8}
+
+var y = numbers.Where(n =&gt; n &gt; 4).Take(3);
+// 先过滤出 {5, 8, 9}，再 Take(3) → {5, 8, 9}</code></pre>
+
+<p>同样的方法，不同顺序，结果完全不同。</p>
+
+<!-- ============================================================ -->
+<h2 id="sec15">15. 方法参数立即求值 vs Lambda 延迟执行</h2>
+
+<p>这是一个非常容易混淆的点：<strong>不是所有写在 LINQ 链里的东西都是延迟的</strong>。</p>
+
+<pre><code>Func&lt;int, int&gt; takewithmessage = n =&gt;
+{
+    Console.WriteLine("one time"); 
+    return n;
+};
+
+var result = bigList
+    .Take(takewithmessage(3))    // ⚠️ 这里立即执行
+    .Where(n =&gt; n &gt; 10);
+
+Console.WriteLine("--- before iteration ---");
+foreach (int x in result) { ... }</code></pre>
+
+<p>输出：</p>
+<pre class="ascii"><code>one time                       ← 在 var result = ... 这一行就打印了
+--- before iteration ---
+（foreach 输出...）</code></pre>
+
+<div class="danger">
+<strong>为什么 "one time" 没有延迟？</strong>
+<ul>
+  <li><code>takewithmessage(3)</code> 不是 lambda，是<strong>对方法的调用</strong></li>
+  <li>C# 规则：调用一个方法时，参数会先被求值，然后才传进去</li>
+  <li>所以 <code>Take(takewithmessage(3))</code> 实际上：
+    <ol>
+      <li>立即调用 <code>takewithmessage(3)</code> → 打印 "one time"，返回 3</li>
+      <li>然后调用 <code>Take(3)</code>，返回一个迭代器（这部分是延迟的）</li>
+    </ol>
+  </li>
+</ul>
+</div>
+
+<h3>对比清单</h3>
+<table>
+  <thead>
+    <tr><th>写法</th><th>何时执行</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>Take(takewithmessage(3))</code></td><td class="bad">立即（参数求值）</td></tr>
+    <tr><td><code>Take(SomeMethod())</code></td><td class="bad">立即（参数求值）</td></tr>
+    <tr><td><code>Take(Math.Max(1, 2))</code></td><td class="bad">立即（参数求值）</td></tr>
+    <tr><td><code>Where(n =&gt; SomeMethod(n))</code></td><td class="ok">延迟（lambda 体）</td></tr>
+    <tr><td><code>Select(n =&gt; Expensive(n))</code></td><td class="ok">延迟（lambda 体）</td></tr>
+  </tbody>
+</table>
+
+<div class="key">
+<strong>口诀：</strong>
+<ul>
+  <li>LINQ 方法的<strong>参数</strong>会立即求值</li>
+  <li>LINQ 方法接收 lambda 之后，<strong>lambda 体</strong>才延迟执行</li>
+</ul>
+</div>
+
+<h3>另一个微妙对比</h3>
+<pre><code>// A：RandomNumber 只调用 1 次（在 .Take() 这一行）
+var a = bigList.Take(RandomNumber());
+
+// B：RandomNumber 在每次 Where 检查时都调用 1 次
+var b = bigList.Where(n =&gt; n &lt; RandomNumber());</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="sec16">16. 上游执行次数 ≥ 下游执行次数</h2>
+
+<p>在流式 LINQ 链中，越靠左（上游）的操作，lambda 调用次数越多。</p>
+
+<pre><code>var result = bigList
+    .Where(n =&gt; n &gt; 10)                  // 上游
+    .Select(n =&gt; Expensive(n))           // 中游
+    .Take(3);                            // 下游
+
+foreach (int x in result) { ... }</code></pre>
+
+<p>对于 <code>bigList = 1..1_000_000</code>，调用次数：</p>
+
+<table>
+  <thead>
+    <tr><th>操作</th><th>lambda 调用次数</th><th>说明</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>Where</code></td><td><strong>13</strong></td><td>检查 1~13 才凑够 3 个 &gt; 10 的</td></tr>
+    <tr><td><code>Select</code> (Expensive)</td><td><strong>3</strong></td><td>只对通过 Where 的元素跑</td></tr>
+    <tr><td><code>Take</code> 输出</td><td><strong>3</strong></td><td>到 3 后整条链路停止</td></tr>
+  </tbody>
+</table>
+
+<div class="key">
+<strong>规律：</strong>
+<pre class="ascii"><code>Where 调用次数  ≥  Select 调用次数  =  Take 输出次数</code></pre>
+<p>因为下游每要 1 个元素，上游可能要"消化"多个被过滤掉的元素才能给出 1 个通过的。</p>
+</div>
+
+<div class="note">
+<strong>设计启示：</strong>
+<ul>
+  <li>✅ 把<strong>便宜的过滤</strong>放上游（Where 在 Select 前）</li>
+  <li>✅ 把<strong>昂贵的转换</strong>放下游（Select 接近末端）</li>
+  <li>✅ 把<strong>截断</strong>放最末（Take / First）</li>
+</ul>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec17_why">17. 为什么要传方法而不是直接调用？</h2>
+
+<p>一个核心问题：既然方法内部可以直接调用别的方法，为什么还要把方法作为参数传进去？</p>
+
+<div class="key">
+<strong>一句话答案：</strong>
+<p>"传方法" ≠ "调用方法"，而是<strong>"暂不决定具体调用什么，留给调用者决定"</strong>。
+这就是<strong>控制反转（Inversion of Control, IoC）</strong>的核心思想。</p>
+</div>
+
+<h3>对比：写死 vs 留洞</h3>
+
+<table>
+  <thead>
+    <tr><th>维度</th><th>直接调用</th><th>委托传递</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>灵活性</td><td>行为写死</td><td>行为可替换</td></tr>
+    <tr><td>测试性</td><td>难以单元测试</td><td>容易注入假实现</td></tr>
+    <tr><td>扩展性</td><td>改需求要改源代码</td><td>加新行为不动旧代码</td></tr>
+    <tr><td>复用性</td><td>一个方法只能干一件事</td><td>一个方法服务多种用法</td></tr>
+    <tr><td>设计</td><td>紧耦合（tight coupling）</td><td>松耦合（loose coupling）</td></tr>
+  </tbody>
+</table>
+
+<h3>场景 1：同一段逻辑，多种用法</h3>
+<pre><code>// ❌ 硬编码
+void PlaceOrder(int orderId)
+{
+    Console.WriteLine($"Placing order {orderId}");
+    // ...
+}
+
+// ✅ 行为外部注入
+void PlaceOrder(int orderId, Action&lt;string&gt; log)
+{
+    log($"Placing order {orderId}");
+    // ...
+}
+
+// 调用方决定怎么记日志
+PlaceOrder(123, msg =&gt; Console.WriteLine(msg));               // 开发
+PlaceOrder(123, msg =&gt; File.AppendAllText("log.txt", msg));   // 测试
+PlaceOrder(123, msg =&gt; Telemetry.Track(msg));                 // 生产
+PlaceOrder(123, msg =&gt; { });                                   // 单元测试</code></pre>
+
+<h3>场景 2：单元测试不可绕过</h3>
+<pre><code>// ❌ 真实 API 写死，单元测试会真的扣钱
+void ProcessPayment(int amount)
+{
+    bool success = CreditCardApi.Charge(amount);
+}
+
+// ✅ "如何收费"作为参数传入
+void ProcessPayment(int amount, Func&lt;int, bool&gt; chargeMethod)
+{
+    bool success = chargeMethod(amount);
+}
+
+// 生产
+ProcessPayment(100, amount =&gt; CreditCardApi.Charge(amount));
+
+// 测试：假装成功 / 失败，不动真实接口
+ProcessPayment(100, amount =&gt; true);
+ProcessPayment(100, amount =&gt; false);</code></pre>
+
+<p>这就是<strong>依赖注入（dependency injection）</strong>的核心思想。</p>
+
+<h3>场景 3：写库给别人用</h3>
+<p>想象你是 LINQ 的作者，写 <code>Where</code> 方法：</p>
+<pre><code>// ❌ 无法预测用户的过滤需求
+IEnumerable&lt;int&gt; Where(IEnumerable&lt;int&gt; source)
+{
+    foreach (int n in source)
+        if (n &gt; 10) yield return n;   // 写死过滤规则
+}
+
+// ✅ 让用户传入过滤规则
+IEnumerable&lt;T&gt; Where&lt;T&gt;(IEnumerable&lt;T&gt; source, Func&lt;T, bool&gt; predicate)
+{
+    foreach (T item in source)
+        if (predicate(item)) yield return item;
+}</code></pre>
+<p>一个 <code>Where</code> 服务所有过滤需求 → LINQ 才能存在。</p>
+
+<h3>场景 4：行为在运行时决定（开闭原则）</h3>
+<pre><code>// ❌ if-else 写死，加新角色就要改这里
+void OnButtonClick()
+{
+    if (userRole == "admin") OpenAdminPanel();
+    else if (userRole == "user") OpenUserPanel();
+    else if (userRole == "guest") ShowLoginDialog();
+}
+
+// ✅ 行为存到字典中，按 key 查找
+Dictionary&lt;string, Action&gt; roleHandlers = new()
+{
+    ["admin"] = () =&gt; OpenAdminPanel(),
+    ["user"]  = () =&gt; OpenUserPanel(),
+    ["guest"] = () =&gt; ShowLoginDialog(),
+};
+
+void OnButtonClick()
+{
+    roleHandlers[userRole]();
+}
+
+// 加新角色：只需加一行，不动 OnButtonClick
+roleHandlers["vip"] = () =&gt; OpenVipPanel();</code></pre>
+
+<h3>场景 5：事件 / 回调 / 异步</h3>
+<pre><code>button.Click += () =&gt; Console.WriteLine("clicked");
+//                       ↑ 委托。没有它，UI 框架不存在。
+
+httpClient.GetAsync(url).ContinueWith(task =&gt; ...);
+//                                       ↑ 异步回调。也是委托。
+
+timer.Elapsed += (sender, args) =&gt; DoSomethingPeriodic();
+//                                       ↑ 事件。也是委托。</code></pre>
+
+<div class="note">
+<strong>整个 .NET 框架都建立在委托之上。</strong> 没有委托：没有事件、没有异步回调、没有 LINQ、没有依赖注入、没有 ASP.NET 的请求处理管道。
+</div>
+
+<h3>比喻：DVD 机和电影</h3>
+<pre class="ascii"><code>直接调用 = 一台只能播 1 部固定电影的 DVD 机
+           （内部硬编码电影，永远只能看这部）
+
+委托传递 = 普通 DVD 机 + 可替换碟片
+           （DVD 机不关心碟片内容，碟片可以无限替换）
+
+委托设计就是把"电影"和"DVD 机"解耦。</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="sec17">18. 核心一句话总结</h2>
+
+<div class="key">
+<ol>
+  <li><strong>Lambda</strong> = 匿名方法行为，必须有委托类型承载</li>
+  <li><strong>Delegate</strong> = 能装住方法的类型，让方法变成可传递的值</li>
+  <li><strong>Func / Action / Predicate</strong> = 最常用的内置泛型委托</li>
+  <li><strong>LINQ</strong> = 高阶方法 + 你传入的委托（lambda）来定义规则</li>
+  <li><strong>价值</strong> = 解耦行为与流程，实现 Open/Closed，便于扩展和测试</li>
+  <li><strong>延迟执行</strong> = LINQ 链是"配方"，消费者触发时才工作</li>
+  <li><strong>流式处理</strong> = Where / Select 拉一个处理一个；OrderBy / GroupBy 必须先吃完</li>
+  <li><strong>顺序很重要</strong> = 先 Where 再 Select 再 Take，效率最高</li>
+  <li><strong>参数立即求值</strong> = Take(M()) 中 M() 立即调用，只有 lambda 体才延迟</li>
+  <li><strong>上游 ≥ 下游</strong> = 把便宜的过滤放前面，昂贵的转换放后面</li>
+</ol>
+</div>
+
+<p class="meta" style="margin-top: 48px; text-align: center;">
+— End of Daily Read —<br>
+下一步学习方向：多播委托（Multicast Delegates） → 事件（Events） → Async / Await
+</p>
+
+</body>
+</html>

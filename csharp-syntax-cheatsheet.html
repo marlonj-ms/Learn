@@ -1,0 +1,808 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>C# Syntax Cheatsheet — 日常语法速查</title>
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+    max-width: 980px;
+    margin: 40px auto;
+    padding: 0 24px 80px;
+    line-height: 1.7;
+    color: #1f2328;
+    background: #fbfbfb;
+  }
+  h1 {
+    border-bottom: 3px solid #0969da;
+    padding-bottom: 12px;
+    color: #0969da;
+  }
+  h2 {
+    border-left: 5px solid #0969da;
+    padding-left: 12px;
+    margin-top: 48px;
+    color: #1f2328;
+  }
+  h3 {
+    color: #24292f;
+    margin-top: 24px;
+  }
+  code {
+    background: #eef2f6;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-family: "Consolas", "Cascadia Code", "Courier New", monospace;
+    font-size: 0.95em;
+    color: #cf222e;
+  }
+  pre {
+    background: #1f2328;
+    color: #e6edf3;
+    padding: 14px 16px;
+    border-radius: 8px;
+    overflow-x: auto;
+    font-family: "Consolas", "Cascadia Code", "Courier New", monospace;
+    font-size: 0.88em;
+    line-height: 1.5;
+  }
+  pre code {
+    background: none;
+    color: inherit;
+    padding: 0;
+    font-size: inherit;
+  }
+  .ok    { color: #1a7f37; font-weight: 600; }
+  .bad   { color: #cf222e; font-weight: 600; }
+  .note  {
+    background: #fff8c5;
+    border-left: 4px solid #d4a72c;
+    padding: 10px 14px;
+    margin: 12px 0;
+    border-radius: 4px;
+  }
+  .key   {
+    background: #ddf4ff;
+    border-left: 4px solid #0969da;
+    padding: 10px 14px;
+    margin: 12px 0;
+    border-radius: 4px;
+  }
+  .danger {
+    background: #ffebe9;
+    border-left: 4px solid #cf222e;
+    padding: 10px 14px;
+    margin: 12px 0;
+    border-radius: 4px;
+  }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 12px 0;
+  }
+  th, td {
+    border: 1px solid #d0d7de;
+    padding: 8px 12px;
+    text-align: left;
+    vertical-align: top;
+  }
+  th { background: #f6f8fa; }
+  .toc {
+    background: #f6f8fa;
+    border: 1px solid #d0d7de;
+    padding: 14px 24px;
+    border-radius: 8px;
+    margin-bottom: 32px;
+    columns: 2;
+    column-gap: 32px;
+  }
+  .toc ol { margin: 0; padding-left: 22px; }
+  .toc li { margin: 4px 0; break-inside: avoid; }
+  a { color: #0969da; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .meta { color: #57606a; font-size: 0.9em; }
+  .back-top {
+    display: inline-block;
+    margin-top: 8px;
+    font-size: 0.85em;
+    color: #57606a;
+  }
+</style>
+</head>
+<body>
+
+<h1>C# Syntax Cheatsheet — 日常语法速查</h1>
+<p class="meta">用途：把日常对话中发现不熟的语法点单独收录，便于反复复习。<br>
+更新方式：每次发现新的不熟练点时，由 @csharp-mentor 追加新章节。</p>
+
+<div class="toc">
+<strong>目录</strong>
+<ol>
+  <li><a href="#s1">变量声明与 var</a></li>
+  <li><a href="#s2">数组（Array）的多种定义</a></li>
+  <li><a href="#s3">List&lt;T&gt; 的定义与初始化</a></li>
+  <li><a href="#s4">Dictionary&lt;K,V&gt; 的定义与初始化</a></li>
+  <li><a href="#s5">target-typed new()（C# 9）</a></li>
+  <li><a href="#s6">集合初始化器 + 索引器初始化</a></li>
+  <li><a href="#s7">对象初始化器（Object Initializer）</a></li>
+  <li><a href="#s8">Lambda 表达式的各种形态</a></li>
+  <li><a href="#s9">字符串：插值、$、@、""</a></li>
+  <li><a href="#s10">PascalCase / camelCase 命名约定</a></li>
+  <li><a href="#s11">方法签名（method signature）</a></li>
+  <li><a href="#s12">访问修饰符 public / private / 等</a></li>
+  <li><a href="#s13">条件运算符与 null 检查</a></li>
+  <li><a href="#s14">类型转换（cast / convert）</a></li>
+  <li><a href="#s15">foreach 与 for 的选择</a></li>
+  <li><a href="#s16">扩展方法（Extension Methods）</a></li>
+  <li><a href="#s17"><code>=&gt;</code> 三种身份对照</a></li>
+  <li><a href="#s18">集合长度三表（Length / Count / Count()）</a></li>
+</ol>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="s1">1. 变量声明与 var</h2>
+
+<pre><code>// 显式类型
+int    age   = 30;
+string name  = "Alice";
+bool   isOn  = true;
+
+// 用 var 让编译器推断类型（需要等号右边能推断出类型）
+var age2  = 30;          // 推断为 int
+var name2 = "Alice";     // 推断为 string
+var list  = new List&lt;int&gt;();   // 推断为 List&lt;int&gt;</code></pre>
+
+<div class="danger">
+<strong>var 不能用的场景：</strong>
+<ul>
+  <li>没有初始化：<code>var x;</code> ❌</li>
+  <li>初始化为 null：<code>var x = null;</code> ❌</li>
+  <li>用来装 lambda：<code>var f = n =&gt; n + 1;</code> ❌（lambda 自己没有类型）</li>
+  <li>字段或方法参数（var 只能用在方法内的局部变量）</li>
+</ul>
+</div>
+
+<a class="back-top" href="#">↑ 回到顶部</a>
+
+<!-- ============================================================ -->
+<h2 id="s2">2. 数组（Array）的多种定义</h2>
+
+<pre><code>// 方式 1：显式 new（最完整写法）
+int[] a = new int[] { 1, 2, 3 };
+
+// 方式 2：省略 new，仅在变量声明时合法
+int[] b = { 1, 2, 3 };
+
+// 方式 3：collection expression（C# 12，最简洁）
+int[] c = [1, 2, 3];
+
+// 方式 4：先指定大小，后赋值
+int[] d = new int[5];      // [0, 0, 0, 0, 0]
+d[0] = 10;
+d[1] = 20;
+
+// 方式 5：用 var
+var e = new int[] { 1, 2, 3 };    // ✅ 推断 int[]
+var f = new[] { 1, 2, 3 };        // ✅ 推断 int[]（元素类型从值推断）
+var g = { 1, 2, 3 };              // ❌ 不行，{...} 不是表达式</code></pre>
+
+<h3>多维数组</h3>
+<pre><code>// 二维数组
+int[,] grid = new int[3, 4];        // 3 行 4 列
+int[,] m = { { 1, 2 }, { 3, 4 } };  // 2x2
+
+// 数组的数组（jagged array）
+int[][] jagged = new int[3][];
+jagged[0] = new int[] { 1, 2 };
+jagged[1] = new int[] { 3, 4, 5 };</code></pre>
+
+<h3>字符串数组的常见写法</h3>
+<pre><code>string[] names1 = new string[] { "Alice", "Bob", "Charlie" };
+string[] names2 = { "Alice", "Bob", "Charlie" };
+string[] names3 = ["Alice", "Bob", "Charlie"];</code></pre>
+
+<div class="note">
+<strong>常见错误：</strong>
+<ul>
+  <li>把 <code>'a'</code>（char）当 <code>"a"</code>（string）写：单引号是字符，双引号是字符串</li>
+  <li>把 <code>{ 1, 2, 3 }</code> 直接传给方法 —— 这种字面量只能用在变量声明右侧</li>
+</ul>
+</div>
+
+<a class="back-top" href="#">↑ 回到顶部</a>
+
+<!-- ============================================================ -->
+<h2 id="s3">3. List&lt;T&gt; 的定义与初始化</h2>
+
+<pre><code>// 方式 1：空 List
+List&lt;int&gt; a = new List&lt;int&gt;();
+
+// 方式 2：target-typed new（C# 9，最常用）
+List&lt;int&gt; b = new();
+
+// 方式 3：带初始元素（集合初始化器）
+List&lt;int&gt; c = new() { 1, 2, 3 };
+
+// 方式 4：从另一个集合创建
+List&lt;int&gt; d = new(c);          // 复制 c
+List&lt;int&gt; e = new List&lt;int&gt;(c);
+
+// 方式 5：collection expression（C# 12）
+List&lt;int&gt; f = [1, 2, 3];</code></pre>
+
+<h3>常用操作</h3>
+<pre><code>List&lt;string&gt; names = new() { "Alice", "Bob" };
+
+names.Add("Charlie");           // 追加
+names.AddRange(new[] { "D", "E" });  // 追加多个
+names.Insert(0, "First");       // 在索引 0 处插入
+names.Remove("Bob");            // 删除（第一个匹配）
+names.RemoveAt(0);              // 按索引删除
+names.Count;                    // 元素个数
+names[0];                       // 索引访问
+names.Contains("Alice");        // 是否存在
+names.Sort();                   // 原地排序</code></pre>
+
+<a class="back-top" href="#">↑ 回到顶部</a>
+
+<!-- ============================================================ -->
+<h2 id="s4">4. Dictionary&lt;K,V&gt; 的定义与初始化</h2>
+
+<pre><code>// 方式 1：空字典
+Dictionary&lt;string, int&gt; a = new Dictionary&lt;string, int&gt;();
+
+// 方式 2：target-typed new
+Dictionary&lt;string, int&gt; b = new();
+
+// 方式 3：集合初始化器（用 { key, value } 形式）
+Dictionary&lt;string, int&gt; c = new()
+{
+    { "alice", 30 },
+    { "bob", 25 },
+};
+
+// 方式 4：索引器初始化器（推荐，更直观）
+Dictionary&lt;string, int&gt; d = new()
+{
+    ["alice"] = 30,
+    ["bob"]   = 25,
+};</code></pre>
+
+<h3>常用操作</h3>
+<pre><code>Dictionary&lt;string, int&gt; ages = new()
+{
+    ["alice"] = 30,
+    ["bob"]   = 25,
+};
+
+ages["charlie"] = 40;            // 添加或更新
+ages.Add("david", 50);           // 添加（key 已存在则抛异常）
+ages.Remove("bob");              // 删除
+ages.ContainsKey("alice");       // 检查 key
+ages["alice"];                   // 取值（key 不存在抛异常）
+
+// 安全取值
+if (ages.TryGetValue("alice", out int age))
+{
+    Console.WriteLine(age);
+}
+
+// 遍历
+foreach (var kvp in ages)
+{
+    Console.WriteLine($"{kvp.Key} = {kvp.Value}");
+}</code></pre>
+
+<a class="back-top" href="#">↑ 回到顶部</a>
+
+<!-- ============================================================ -->
+<h2 id="s5">5. target-typed new()（C# 9）</h2>
+
+<p>当左边已经有类型时，右边可以省略类型名：</p>
+
+<pre><code>// 完整写法
+Dictionary&lt;string, List&lt;int&gt;&gt; map = new Dictionary&lt;string, List&lt;int&gt;&gt;();
+
+// target-typed new
+Dictionary&lt;string, List&lt;int&gt;&gt; map = new();
+
+// 任何类型都适用
+List&lt;int&gt;       a = new();
+StringBuilder   b = new();
+Person          c = new();
+HashSet&lt;string&gt; d = new();
+
+// 带参数也可以
+StringBuilder e = new(100);     // 初始容量 100
+Person f = new("Alice", 30);    // 调用构造函数</code></pre>
+
+<div class="key">
+<strong>记忆口诀：</strong> <code>new()</code> 意思是 "new 一个左边那个类型"。
+</div>
+
+<a class="back-top" href="#">↑ 回到顶部</a>
+
+<!-- ============================================================ -->
+<h2 id="s6">6. 集合初始化器 + 索引器初始化</h2>
+
+<pre><code>// 列表风格（用 { ... }）
+List&lt;int&gt; list = new() { 1, 2, 3 };
+
+Dictionary&lt;string, int&gt; dict1 = new()
+{
+    { "a", 1 },
+    { "b", 2 },
+};
+
+// 索引器风格（用 [...] = ...）
+Dictionary&lt;string, int&gt; dict2 = new()
+{
+    ["a"] = 1,
+    ["b"] = 2,
+};</code></pre>
+
+<h3>两种风格的差异</h3>
+<table>
+  <thead><tr><th>风格</th><th>背后等价于</th><th>适用场景</th></tr></thead>
+  <tbody>
+    <tr><td><code>{ key, value }</code></td><td><code>.Add(key, value)</code></td><td>key 重复会抛异常</td></tr>
+    <tr><td><code>["key"] = value</code></td><td><code>obj["key"] = value</code></td><td>key 重复会覆盖</td></tr>
+  </tbody>
+</table>
+
+<a class="back-top" href="#">↑ 回到顶部</a>
+
+<!-- ============================================================ -->
+<h2 id="s7">7. 对象初始化器（Object Initializer）</h2>
+
+<p>创建对象后立即给属性赋值，不用调用构造函数也能初始化：</p>
+
+<pre><code>public class Person
+{
+    public string Name { get; set; }
+    public int    Age  { get; set; }
+}
+
+// 传统方式
+Person p1 = new Person();
+p1.Name = "Alice";
+p1.Age  = 30;
+
+// 对象初始化器
+Person p2 = new Person { Name = "Alice", Age = 30 };
+
+// target-typed new + 对象初始化器
+Person p3 = new() { Name = "Alice", Age = 30 };
+
+// 集合 + 对象初始化器组合
+List&lt;Person&gt; people = new()
+{
+    new() { Name = "Alice", Age = 30 },
+    new() { Name = "Bob",   Age = 25 },
+};</code></pre>
+
+<a class="back-top" href="#">↑ 回到顶部</a>
+
+<!-- ============================================================ -->
+<h2 id="s8">8. Lambda 表达式的各种形态</h2>
+
+<pre><code>// 无参数
+Action a = () =&gt; Console.WriteLine("hi");
+
+// 一个参数（括号可省略）
+Func&lt;int, int&gt; b = n =&gt; n * 2;
+Func&lt;int, int&gt; c = (n) =&gt; n * 2;       // 等价
+
+// 多个参数（括号必须）
+Func&lt;int, int, int&gt; d = (a, b) =&gt; a + b;
+
+// 显式类型（少用）
+Func&lt;int, int&gt; e = (int n) =&gt; n * 2;
+
+// 语句体（statement lambda）：多行逻辑用 { }
+Func&lt;int, int&gt; f = n =&gt;
+{
+    Console.WriteLine($"got {n}");
+    return n * 2;
+};
+
+// 无返回值的 lambda（用于 Action）
+Action&lt;string&gt; g = msg =&gt; Console.WriteLine(msg);
+Action&lt;string&gt; h = msg =&gt;
+{
+    Console.WriteLine("logging:");
+    Console.WriteLine(msg);
+};</code></pre>
+
+<div class="note">
+<strong>表达式体 vs 语句体：</strong>
+<ul>
+  <li><code>n =&gt; n * 2</code> = 表达式体（expression lambda），直接返回表达式的值</li>
+  <li><code>n =&gt; { return n * 2; }</code> = 语句体（statement lambda），必须用 <code>return</code></li>
+</ul>
+</div>
+
+<a class="back-top" href="#">↑ 回到顶部</a>
+
+<!-- ============================================================ -->
+<h2 id="s9">9. 字符串：插值、$、@、"""</h2>
+
+<pre><code>string name = "Alice";
+int age = 30;
+
+// 拼接（最原始）
+string s1 = "Name: " + name + ", Age: " + age;
+
+// 插值字符串（推荐）
+string s2 = $"Name: {name}, Age: {age}";
+
+// 表达式可以直接放在 {}
+string s3 = $"Total: {age * 2}";
+string s4 = $"Upper: {name.ToUpper()}";
+
+// 格式化
+string s5 = $"Price: {123.456:F2}";   // F2 = 保留 2 位小数
+
+// @ 字符串（不处理转义符）
+string path1 = "C:\\Users\\Marlon";
+string path2 = @"C:\Users\Marlon";    // 等价但更易读
+
+// $@ 或 @$ 组合（插值 + 不转义）
+string s6 = $@"Path: C:\Users\{name}";
+
+// 多行字符串（C# 11+，用 """）
+string s7 = """
+    {
+        "name": "Alice",
+        "age": 30
+    }
+    """;</code></pre>
+
+<a class="back-top" href="#">↑ 回到顶部</a>
+
+<!-- ============================================================ -->
+<h2 id="s10">10. PascalCase / camelCase 命名约定</h2>
+
+<table>
+  <thead><tr><th>类型</th><th>约定</th><th>示例</th></tr></thead>
+  <tbody>
+    <tr><td>类名（Class）</td><td>PascalCase</td><td><code>Person</code>, <code>OrderService</code></td></tr>
+    <tr><td>方法（Method）</td><td>PascalCase</td><td><code>GetName()</code>, <code>PlaceOrder()</code></td></tr>
+    <tr><td>属性（Property）</td><td>PascalCase</td><td><code>Name</code>, <code>OrderId</code></td></tr>
+    <tr><td>公共字段（public field）</td><td>PascalCase</td><td><code>public int Count;</code></td></tr>
+    <tr><td>常量（const）</td><td>PascalCase</td><td><code>const int MaxSize = 100;</code></td></tr>
+    <tr><td>局部变量（local var）</td><td>camelCase</td><td><code>int orderCount</code></td></tr>
+    <tr><td>方法参数</td><td>camelCase</td><td><code>void M(int orderId)</code></td></tr>
+    <tr><td>私有字段（private field）</td><td>_camelCase</td><td><code>private int _count;</code></td></tr>
+    <tr><td>接口</td><td>I + PascalCase</td><td><code>IList</code>, <code>IDisposable</code></td></tr>
+  </tbody>
+</table>
+
+<div class="danger">
+<strong>常见错误：</strong>
+<ul>
+  <li><code>.where()</code> ❌ → <code>.Where()</code> ✅（LINQ 方法都是 Pascal）</li>
+  <li><code>.length</code> ❌ → <code>.Length</code> ✅（属性都是 Pascal）</li>
+  <li><code>list.add()</code> ❌ → <code>list.Add()</code> ✅</li>
+</ul>
+</div>
+
+<a class="back-top" href="#">↑ 回到顶部</a>
+
+<!-- ============================================================ -->
+<h2 id="s11">11. 方法签名（method signature）</h2>
+
+<pre><code>// 完整方法定义
+public int Add(int a, int b)
+{
+    return a + b;
+}
+// ↑         ↑   ↑          ↑    ↑
+// 访问修饰符 返回值 方法名     参数  方法体
+
+// 表达式体方法（expression-bodied method，C# 6+）
+public int Add(int a, int b) =&gt; a + b;
+
+// 无返回值
+public void PrintHello()
+{
+    Console.WriteLine("Hello");
+}
+
+// 静态方法（不需要实例）
+public static int Square(int n) =&gt; n * n;
+
+// 带默认参数
+public void Greet(string name = "Guest")
+{
+    Console.WriteLine($"Hello, {name}");
+}
+
+// 命名参数调用
+Greet(name: "Alice");
+
+// 可变参数（params）
+public int Sum(params int[] numbers) =&gt; numbers.Sum();
+Sum(1, 2, 3, 4);   // 任意个数</code></pre>
+
+<a class="back-top" href="#">↑ 回到顶部</a>
+
+<!-- ============================================================ -->
+<h2 id="s12">12. 访问修饰符</h2>
+
+<table>
+  <thead><tr><th>修饰符</th><th>可见范围</th></tr></thead>
+  <tbody>
+    <tr><td><code>public</code></td><td>任何地方</td></tr>
+    <tr><td><code>private</code></td><td>同一个类内部（默认）</td></tr>
+    <tr><td><code>protected</code></td><td>本类 + 子类</td></tr>
+    <tr><td><code>internal</code></td><td>同一个程序集（assembly）</td></tr>
+    <tr><td><code>protected internal</code></td><td>子类 或 同一程序集</td></tr>
+    <tr><td><code>private protected</code></td><td>同一程序集中的子类</td></tr>
+  </tbody>
+</table>
+
+<pre><code>public class Person
+{
+    public  string Name;        // 任何代码可访问
+    private int    _age;        // 只有 Person 内部
+    internal int   Id;          // 同一程序集
+}</code></pre>
+
+<a class="back-top" href="#">↑ 回到顶部</a>
+
+<!-- ============================================================ -->
+<h2 id="s13">13. 条件运算符与 null 检查</h2>
+
+<pre><code>// 三元运算符
+int abs = n &lt; 0 ? -n : n;
+
+// null 合并（??）
+string name = userName ?? "Guest";    // userName 为 null 时用 "Guest"
+
+// null 合并赋值（??=）
+list ??= new List&lt;int&gt;();             // list 为 null 时才赋值
+
+// null 条件访问（?.）
+int? len = name?.Length;              // name 为 null 时返回 null，不会崩
+
+// 链式 null 条件
+int? len2 = person?.Address?.Street?.Length;
+
+// 与 ?? 配合
+int len3 = name?.Length ?? 0;         // null 时返回 0
+
+// pattern matching
+if (obj is string s)
+{
+    Console.WriteLine(s.Length);      // s 已经是 string 类型
+}
+
+if (obj is null) { ... }
+if (obj is not null) { ... }</code></pre>
+
+<a class="back-top" href="#">↑ 回到顶部</a>
+
+<!-- ============================================================ -->
+<h2 id="s14">14. 类型转换（cast / convert）</h2>
+
+<pre><code>// 隐式转换（安全，编译器自动）
+int   i = 10;
+long  l = i;          // int -&gt; long，OK
+double d = i;         // int -&gt; double，OK
+
+// 显式转换（cast，可能丢失精度或溢出）
+double pi = 3.14;
+int x = (int)pi;      // 3（小数被截断）
+
+// 字符串 / 数字互转
+string s1 = 123.ToString();           // int -&gt; string
+int    n1 = int.Parse("123");         // string -&gt; int（失败抛异常）
+bool   ok = int.TryParse("abc", out int n2);   // 安全转换
+
+// Convert 类（更通用）
+int x1 = Convert.ToInt32("123");
+double y1 = Convert.ToDouble("3.14");
+
+// 引用类型转换
+object o = "hello";
+string s2 = (string)o;       // 失败抛异常
+string s3 = o as string;     // 失败返回 null
+if (o is string s4) { ... }  // 安全检查</code></pre>
+
+<a class="back-top" href="#">↑ 回到顶部</a>
+
+<!-- ============================================================ -->
+<h2 id="s15">15. foreach 与 for 的选择</h2>
+
+<pre><code>List&lt;string&gt; names = new() { "Alice", "Bob", "Charlie" };
+
+// foreach：遍历所有元素，最常用
+foreach (string name in names)
+{
+    Console.WriteLine(name);
+}
+
+// for：需要索引时
+for (int i = 0; i &lt; names.Count; i++)
+{
+    Console.WriteLine($"{i}: {names[i]}");
+}
+
+// while：需要复杂退出条件
+int j = 0;
+while (j &lt; names.Count &amp;&amp; names[j] != "Bob")
+{
+    j++;
+}
+
+// do-while：至少执行一次
+do
+{
+    // ...
+} while (condition);</code></pre>
+
+<div class="note">
+<strong>选择规则：</strong>
+<ul>
+  <li>大部分情况用 <code>foreach</code>，简单不易错</li>
+  <li>需要修改集合（边遍历边删除）时不要用 foreach，会抛异常</li>
+  <li>需要索引、需要倒序、需要跳元素 → 用 <code>for</code></li>
+  <li>条件不固定 → 用 <code>while</code></li>
+</ul>
+</div>
+
+<a class="back-top" href="#">↑ 回到顶部</a>
+
+<!-- ============================================================ -->
+<h2 id="s16">16. 扩展方法（Extension Methods）</h2>
+
+<pre><code>public static class MyExtensions   // ① 必须 static class
+{
+    public static bool IsEven(this int n)  // ② static  ③ this 第一参数
+        =&gt; n % 2 == 0;
+
+    // 多参数：第一参数自动从"点前"对象拿，后面的显式传
+    public static int AddBy(this int age, int y) =&gt; age + y;
+}
+
+// 两种调用完全等价：
+5.IsEven();                  // 点语法（漂亮）
+MyExtensions.IsEven(5);      // 静态调用（编译器实际生成的）
+
+10.AddBy(3);                 // → 13（this=10, y=3）</code></pre>
+
+<div class="key">
+<strong>三铁律：</strong>
+<ol>
+  <li>类必须是 <code>static class</code></li>
+  <li>方法必须是 <code>static</code></li>
+  <li>第一参数前加 <code>this</code> —— 决定能扩展给哪种类型</li>
+</ol>
+</div>
+
+<div class="note">
+<strong>查找规则：</strong>编译器靠 <code>using</code> 命名空间 + <code>this</code> 参数类型定位扩展方法，<u>跟 class 叫什么名字无关</u>。
+所以 <code>using System.Linq;</code> 才让 <code>list.Where(...)</code> 可用。
+</div>
+
+<a class="back-top" href="#">↑ 回到顶部</a>
+
+<!-- ============================================================ -->
+<h2 id="s17"><code>=&gt;</code> 三种身份对照</h2>
+
+<table>
+<thead><tr><th>符号</th><th>位置</th><th>含义</th><th>例子</th></tr></thead>
+<tbody>
+<tr>
+  <td><code>=</code></td>
+  <td>变量声明后</td>
+  <td>赋值</td>
+  <td><code>int x = 5;</code></td>
+</tr>
+<tr>
+  <td><code>=&gt;</code></td>
+  <td>参数列表后 <code>n =&gt;</code></td>
+  <td>Lambda 箭头（分隔参数和函数体）</td>
+  <td><code>n =&gt; n + 1</code></td>
+</tr>
+<tr>
+  <td><code>=&gt;</code></td>
+  <td>方法/属性签名后 <code>) =&gt;</code></td>
+  <td>表达式体（替代 <code>{ return ... }</code>）</td>
+  <td><code>int Add(int n) =&gt; n + 1;</code></td>
+</tr>
+</tbody>
+</table>
+
+<pre><code>// 经典：一行里两个 => 含义完全不同
+public Func&lt;int, int&gt; MakeAdder(int n) =&gt; x =&gt; x + n;
+//                                     ↑   ↑
+//                          表达式体（return）  Lambda 箭头</code></pre>
+
+<div class="ok">
+<strong>识别口诀：</strong>
+<ul>
+  <li>左边是参数 → Lambda 箭头</li>
+  <li>左边是方法/属性签名 → 表达式体语法糖</li>
+</ul>
+</div>
+
+<div class="danger">
+<strong>陷阱：</strong>表达式体 <code>=&gt;</code> 后面<u>只能跟一个表达式</u>，不能跟代码块 <code>{ ... }</code>。
+多行逻辑必须老老实实写 <code>{ }</code>。
+</div>
+
+<a class="back-top" href="#">↑ 回到顶部</a>
+
+<!-- ============================================================ -->
+<h2 id="s18">18. 集合长度三表（Length / Count / Count()）</h2>
+
+<table>
+<thead><tr><th>类型</th><th>怎么拿长度</th><th>类型</th></tr></thead>
+<tbody>
+<tr>
+  <td><code>int[]</code>（数组）</td>
+  <td><code>arr.Length</code></td>
+  <td>属性</td>
+</tr>
+<tr>
+  <td><code>string</code></td>
+  <td><code>s.Length</code></td>
+  <td>属性</td>
+</tr>
+<tr>
+  <td><code>List&lt;T&gt;</code></td>
+  <td><code>list.Count</code></td>
+  <td>属性</td>
+</tr>
+<tr>
+  <td><code>Dictionary&lt;K,V&gt;</code> / <code>HashSet&lt;T&gt;</code></td>
+  <td><code>.Count</code></td>
+  <td>属性</td>
+</tr>
+<tr>
+  <td><code>IEnumerable&lt;T&gt;</code></td>
+  <td><code>seq.Count()</code></td>
+  <td>LINQ 扩展方法</td>
+</tr>
+</tbody>
+</table>
+
+<div class="danger">
+<strong>陷阱：</strong><code>IEnumerable&lt;T&gt;</code> 没有 <code>.Length</code> 也没有 <code>.Count</code> 属性！
+要么用 LINQ 的 <code>.Count()</code>（会遍历整个序列），要么自己 foreach 计数。
+原因：<code>IEnumerable</code> 可能是<u>无限</u>序列，没有"长度"的概念。
+</div>
+
+<pre><code>// ❌ 错误：IEnumerable 没有 Length
+public int Average2(IEnumerable&lt;int&gt; nums)
+{
+    int sum = 0;
+    foreach (int n in nums) sum += n;
+    return sum / nums.Length;   // 编译错误！
+}
+
+// ✅ 正确：边遍历边计数
+public int Average2(IEnumerable&lt;int&gt; nums)
+{
+    int sum = 0, count = 0;
+    foreach (int n in nums) { sum += n; count++; }
+    return sum / count;
+}
+
+// ✅ 也可以用 LINQ
+using System.Linq;
+int avg = nums.Sum() / nums.Count();</code></pre>
+
+<a class="back-top" href="#">↑ 回到顶部</a>
+
+<!-- ============================================================ -->
+<p class="meta" style="margin-top: 60px; text-align: center;">
+— End of Cheatsheet —<br>
+每发现新的不熟练语法点时，会持续追加新章节。
+</p>
+
+</body>
+</html>

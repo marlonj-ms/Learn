@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>2026-05-14 · 扩展方法 + Lambda 深入（完整记录）</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; max-width: 860px; margin: 40px auto; padding: 0 24px 80px; line-height: 1.75; color: #1f2328; background: #fbfbfb; }
+  h1 { border-bottom: 3px solid #1a7f37; padding-bottom: 8px; color: #1a7f37; }
+  h2 { border-left: 4px solid #1a7f37; padding-left: 10px; margin-top: 36px; color: #1f2328; font-size: 1.3em; }
+  h3 { color: #1a7f37; margin-top: 22px; font-size: 1.08em; }
+  code { background: #eef2f6; padding: 2px 6px; border-radius: 4px; font-family: "Consolas", monospace; font-size: 0.94em; color: #cf222e; }
+  pre { background: #1f2328; color: #e6edf3; padding: 12px 16px; border-radius: 8px; overflow-x: auto; font-size: 0.86em; }
+  pre code { background: none; color: inherit; padding: 0; }
+  .key { background: #ddf4ff; border-left: 4px solid #0969da; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .note { background: #fff8c5; border-left: 4px solid #d4a72c; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .danger { background: #ffebe9; border-left: 4px solid #cf222e; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .ok-box { background: #dafbe1; border-left: 4px solid #1a7f37; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .toc { background: #f6f8fa; border: 1px solid #d0d7de; padding: 12px 22px; border-radius: 8px; margin: 20px 0; }
+  .toc ol { margin: 4px 0; padding-left: 22px; }
+  .toc li { margin: 3px 0; }
+  a { color: #0969da; text-decoration: none; } a:hover { text-decoration: underline; }
+  .back { font-size: 0.9em; color: #57606a; margin-bottom: 16px; }
+  .meta { color: #57606a; font-size: 0.9em; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; }
+  th, td { border: 1px solid #d0d7de; padding: 6px 10px; text-align: left; vertical-align: top; }
+  th { background: #f6f8fa; }
+  .ok { color: #1a7f37; font-weight: 600; }
+  .bad { color: #cf222e; font-weight: 600; }
+  .quote { background: #f6f8fa; border-left: 3px solid #8c959f; padding: 8px 14px; margin: 10px 0; color: #57606a; font-style: italic; }
+</style>
+</head>
+<body>
+
+<div class="back"><a href="../dailyread.html">← 返回首页</a></div>
+
+<h1>扩展方法 + Lambda 深入（完整记录）</h1>
+<p class="meta">2026-05-14 · 完整阅读约 12 分钟 · 配套代码：<a href="../2026-05-14/ExtensionMethods-Practice.cs">ExtensionMethods-Practice.cs</a></p>
+
+<div class="ok-box">
+<strong>🎯 今天的最大突破：彻底通了 Lambda 的"值"本质</strong><br>
+从"看到 lambda 就头大" → 主动写出 <code>Func&lt;int,int&gt; x = n =&gt; n + amount; return x;</code> 这种等价拆解。
+说明 lambda 不再是神秘符号，而是"一个值"。这是函数式思维的起点。
+</div>
+
+<div class="toc">
+<strong>目录</strong>
+<ol>
+  <li><a href="#s1">一句话总结（10 条）</a></li>
+  <li><a href="#s2">扩展方法 — 三铁律</a></li>
+  <li><a href="#s3"><code>this</code> 是语法糖（最关键认知）</a></li>
+  <li><a href="#s4">编译器如何"找到"扩展方法</a></li>
+  <li><a href="#s5">重名冲突 — 编译器不会猜</a></li>
+  <li><a href="#s6">多参数扩展方法</a></li>
+  <li><a href="#s7">扩展任意类型（包括委托）</a></li>
+  <li><a href="#s8"><code>=</code> vs <code>=&gt;</code> 三种身份</a></li>
+  <li><a href="#s9">表达式体的陷阱</a></li>
+  <li><a href="#s10">Lambda 是个值（心智模型升级）</a></li>
+  <li><a href="#s11">方法可以 return lambda（函数工厂）</a></li>
+  <li><a href="#s12">Lambda 形参 = 等被调用时才拿值</a></li>
+  <li><a href="#s13">闭包初探（捕获外层变量）</a></li>
+  <li><a href="#s14">AndThen — 函数组合</a></li>
+  <li><a href="#s15">为什么 <code>second(first(n))</code> 不能改</a></li>
+  <li><a href="#s16">扩展方法 = 自动传 + 显式传</a></li>
+  <li><a href="#s17">实战练习中的语法盲点</a></li>
+  <li><a href="#s18">自测题（明天复习）</a></li>
+</ol>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="s1">1. 一句话总结（10 条核心要点）</h2>
+
+<div class="key">
+<ol>
+  <li><strong>扩展方法三铁律</strong>：<code>static class</code> + <code>static method</code> + 第一参数加 <code>this</code></li>
+  <li><strong><code>this</code> 是语法糖</strong>：<code>n.IsEven()</code> 编译后 ≡ <code>MyExtensions.IsEven(n)</code></li>
+  <li><strong>查找规则</strong>：编译器靠 <code>using</code> 命名空间 + <code>this</code> 参数类型定位，<u>跟 class 名字无关</u></li>
+  <li><strong>重名冲突</strong>：编译器报错（ambiguous），不会自动选</li>
+  <li><strong>能扩展一切</strong>：基础类型 / 引用类型 / 接口 / 泛型 / <u>委托</u> / <code>object</code></li>
+  <li><strong>Lambda 是个值</strong>：和 <code>5</code>、<code>"hello"</code> 地位相同，可赋值/传参/return</li>
+  <li><strong>方法可返回 lambda</strong>（"函数工厂"模式）</li>
+  <li><strong>Lambda 形参</strong> = 方法形参，<u>调用时才拿到具体值</u></li>
+  <li><strong>闭包</strong>：lambda 能"记住"外层方法的变量</li>
+  <li><strong>函数组合</strong>：<code>a.AndThen(b)</code> = 先 a，然后 b（内层括号 = 先执行）</li>
+</ol>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="s2">2. 扩展方法 — 三铁律</h2>
+
+<pre><code>public static class MyExtensions     // ① 必须 static class
+{
+    public static bool IsEven(this int n)   // ② static method
+        =&gt; n % 2 == 0;                      // ③ this 第一参数
+}</code></pre>
+
+<table>
+<thead><tr><th>规则</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td>① 类必须 <code>static class</code></td><td>普通 class 即使方法是 static 也不行</td></tr>
+<tr><td>② 方法必须 <code>static</code></td><td>因为它本质就是一个静态调用</td></tr>
+<tr><td>③ 第一参数加 <code>this</code></td><td><code>this</code> 那个参数的类型 = 被扩展的类型</td></tr>
+</tbody>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="s3">3. <code>this</code> 是语法糖（最关键认知）</h2>
+
+<div class="quote">
+今天最大的卡点之一：「这个看起来就是定义了一个 static class 和 method，默认就可以 MyExtensions.IsEven() 调用，为啥 n.IsEven() 可以 work？」
+</div>
+
+<p><strong>答案</strong>：<code>this</code> 关键字告诉编译器：「允许我用点语法调用」。编译器在底层把 <code>n.IsEven()</code> <u>翻译</u>成 <code>MyExtensions.IsEven(n)</code>。两种写法<strong>编译出来完全一样</strong>。</p>
+
+<pre><code>// 版本 A：带 this
+public static bool IsEven(this int n) =&gt; n % 2 == 0;
+
+// 版本 B：不带 this
+public static bool IsOdd(int n) =&gt; n % 2 != 0;
+
+int x = 5;
+
+// 版本 A 两种写法都行：
+x.IsEven();                  // ✅ 编译器认识
+MyExtensions.IsEven(x);      // ✅ 也行
+
+// 版本 B 只能这样：
+MyExtensions.IsOdd(x);       // ✅ 行
+x.IsOdd();                   // ❌ 编译错误！没有 this 就不能点语法</code></pre>
+
+<div class="key">
+<strong>为啥要发明这个语法糖？</strong> 为了链式调用好看。<br>
+<code>list.Where(...).Select(...)</code> 比 <code>Enumerable.Select(Enumerable.Where(list, ...), ...)</code> 优雅一万倍。
+</div>
+
+<!-- ============================================================ -->
+<h2 id="s4">4. 编译器如何"找到"扩展方法</h2>
+
+<div class="quote">
+卡点：「public static class MyExtensions 这个和数字毫无关联，为什么 x.IsEven() 知道找这个 class？」
+</div>
+
+<p><strong>答案</strong>：编译器<u>不看 class 名字</u>。它做的事是：</p>
+
+<pre><code>看到 x.IsEven()
+  ↓
+1. 先看 int 类型自己有没有 IsEven 方法？→ 没有
+  ↓
+2. 扫描当前文件所有 using 引入的命名空间
+  ↓
+3. 在这些命名空间里找：所有 static class 中，
+   带 this 的、第一个参数类型匹配 int（或 int 的父类）的方法
+  ↓
+4. 找到了 MyExtensions.IsEven(this int n) ✅
+  ↓
+5. 把 x.IsEven() 翻译成 MyExtensions.IsEven(x)</code></pre>
+
+<div class="note">
+<strong>这就是为什么</strong>：不写 <code>using System.Linq;</code> 就用不了 <code>list.Where(...)</code>。
+<code>Where</code> 定义在 <code>System.Linq.Enumerable</code> 静态类里，
+没引入命名空间，编译器扫描不到。
+</div>
+
+<!-- ============================================================ -->
+<h2 id="s5">5. 重名冲突 — 编译器不会猜</h2>
+
+<pre><code>public static class A { public static bool IsEven(this int n) =&gt; n % 2 == 0; }
+public static class B { public static bool IsEven(this int n) =&gt; n % 3 == 0; }
+
+using A;        // 只引入 A → 调 A 的（n % 2）
+using B;        // 只引入 B → 调 B 的（n % 3）
+
+// 两个都引入：
+using A;
+using B;
+x.IsEven();     // ❌ 编译错误：ambiguous call
+
+// 必须显式：
+A.IsEven(x);    // ✅
+B.IsEven(x);    // ✅</code></pre>
+
+<div class="danger">
+<strong>原则：</strong>编译器<u>从不猜测</u>。遇到不明确就报错，让你显式指定。
+</div>
+
+<!-- ============================================================ -->
+<h2 id="s6">6. 多参数扩展方法</h2>
+
+<pre><code>public static int AddBy(this int age, int y) =&gt; age + y;
+
+int m = 10;
+m.AddBy(3);     // → 13</code></pre>
+
+<p>编译器翻译：</p>
+<pre><code>MyExtensions.AddBy(m, 3)
+//                 ↑  ↑
+//              this 普通参数</code></pre>
+
+<table>
+<thead><tr><th>参数位置</th><th>怎么传</th></tr></thead>
+<tbody>
+<tr><td><code>this</code> 那个（第一个）</td><td>由"点前面的对象"<strong>自动</strong>传入</td></tr>
+<tr><td>后面的所有参数</td><td>调用时在括号里<strong>显式</strong>传入</td></tr>
+</tbody>
+</table>
+
+<div class="key">
+<strong>这就是 LINQ 的工作方式：</strong>
+<pre style="background:#0d1117; margin-top:8px;"><code>public static IEnumerable&lt;T&gt; Where&lt;T&gt;(
+    this IEnumerable&lt;T&gt; source,    // ← 自动从"点前"对象拿
+    Func&lt;T, bool&gt; predicate)        // ← 括号里显式传
+
+list.Where(n =&gt; n &gt; 5)
+//   ↑     ↑
+// source predicate</code></pre>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="s7">7. 扩展任意类型（包括委托）</h2>
+
+<div class="quote">
+卡点：「如果 <code>public static string IsEven(this Func&lt;int, bool&gt;)</code> 也可以扩展一个 Func 的扩展？」
+</div>
+
+<p><strong>答案：完全可以！</strong>扩展方法的能力远超你想象：</p>
+
+<pre><code>// ① 基础类型
+public static int Squared(this int n) =&gt; n * n;
+
+// ② string
+public static bool IsEmail(this string s) =&gt; s.Contains("@");
+
+// ③ 集合
+public static T SecondOrDefault&lt;T&gt;(this IEnumerable&lt;T&gt; source)
+    =&gt; source.Skip(1).FirstOrDefault();
+
+// ④ 委托（最酷的）
+public static string Describe(this Func&lt;int, bool&gt; predicate)
+{
+    bool resultOn5 = predicate(5);
+    return $"对 5 的判断结果是：{resultOn5}";
+}
+
+Func&lt;int, bool&gt; isPositive = n =&gt; n &gt; 0;
+isPositive.Describe();   // → "对 5 的判断结果是：True"
+
+// ⑤ object（所有类型）
+public static string ToJson(this object obj) =&gt; /* ... */;</code></pre>
+
+<div class="note">
+<strong>注意：</strong>Func 泛型参数<u>只写类型</u>，不带参数名。<br>
+<code>Func&lt;int, bool&gt;</code> ✅ &nbsp;&nbsp; <code>Func&lt;int x, bool y&gt;</code> ❌
+</div>
+
+<!-- ============================================================ -->
+<h2 id="s8">8. <code>=</code> vs <code>=&gt;</code> 三种身份</h2>
+
+<div class="quote">
+卡点：「我有的时候看到 <code>n =&gt; second(first(n));</code>，有的时候看到 <code>=&gt; n =&gt; second(first(n));</code>，有的时候看到 <code>= n =&gt; n * 10;</code>。我很困惑。」
+</div>
+
+<table>
+<thead><tr><th>符号</th><th>位置</th><th>含义</th><th>例子</th></tr></thead>
+<tbody>
+<tr>
+  <td><code>=</code></td>
+  <td>变量声明后</td>
+  <td>赋值运算符</td>
+  <td><code>int x = 5;</code></td>
+</tr>
+<tr>
+  <td><code>=&gt;</code></td>
+  <td>参数列表后 <code>n =&gt;</code></td>
+  <td>Lambda 箭头</td>
+  <td><code>n =&gt; n + 1</code></td>
+</tr>
+<tr>
+  <td><code>=&gt;</code></td>
+  <td>方法/属性签名后 <code>) =&gt;</code></td>
+  <td>表达式体（语法糖）</td>
+  <td><code>int F(int n) =&gt; n + 1;</code></td>
+</tr>
+</tbody>
+</table>
+
+<h3>经典：一行里出现两个 <code>=&gt;</code></h3>
+
+<pre><code>public Func&lt;int, int&gt; MakeAdder(int n) =&gt; x =&gt; x + n;
+//                                     ↑   ↑
+//                          表达式体（return）  Lambda 箭头</code></pre>
+
+<p>这<u>不</u>是错误！它等价于：</p>
+
+<pre><code>public Func&lt;int, int&gt; MakeAdder(int n)
+{
+    return x =&gt; x + n;
+}</code></pre>
+
+<h3>识别口诀 ⭐</h3>
+<div class="ok-box">
+<ul>
+  <li>左边是<strong>参数</strong> → Lambda 箭头</li>
+  <li>左边是<strong>方法/属性签名</strong> → 表达式体语法糖（替代 <code>{ return ... }</code>）</li>
+</ul>
+</div>
+
+<h3>实战识别（今天答对了 5/5）</h3>
+<pre><code>// 例 1
+Func&lt;int, int&gt; a = x =&gt; x + 1;            // → Lambda 箭头
+
+// 例 2
+public int Add(int x, int y) =&gt; x + y;     // → 表达式体
+
+// 例 3
+public Func&lt;int, int&gt; MakeAdder(int n) =&gt; x =&gt; x + n;
+//                                       ↑   ↑
+//                                   表达式体  Lambda 箭头
+
+// 例 4
+list.Where(x =&gt; x &gt; 5);                    // → Lambda 箭头
+
+// 例 5
+public string Name =&gt; "Tom";               // → 属性的表达式体！</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="s9">9. 表达式体的陷阱</h2>
+
+<div class="danger">
+表达式体 <code>=&gt;</code> 后面<u>只能</u>跟<strong>一个表达式</strong>，<u>不能</u>跟代码块 <code>{ ... }</code>！
+</div>
+
+<pre><code>// ✅ 一行表达式
+public int Square(int n) =&gt; n * n;
+
+// ❌ 不能有大括号
+public int Square(int n) =&gt;
+{
+    int result = n * n;
+    return result;
+};   // 编译错误！
+
+// ✅ 多行必须用大括号 + return
+public int Square(int n)
+{
+    int result = n * n;
+    return result;
+}</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="s10">10. Lambda 是个值（心智模型升级）⭐</h2>
+
+<div class="quote">
+今天最大的认知突破。
+</div>
+
+<p>普通的值你都见过：</p>
+<pre><code>int x = 5;            // 5 是一个 int 值
+string s = "hello";   // "hello" 是一个 string 值
+Func&lt;int, int&gt; f = n =&gt; n + 5;
+// ────────────────  ──────────────
+//   左：变量          右：lambda（也是一个值！）</code></pre>
+
+<p><strong>Lambda 就是一个"没名字的方法"</strong>。它和普通方法是<u>同一种东西</u>：</p>
+
+<pre><code>// 写法 A：完整方法（有名字）
+int Add5(int n)
+{
+    return n + 5;
+}
+
+// 写法 B：lambda（没名字）—— 等价！
+n =&gt; n + 5</code></pre>
+
+<table>
+<thead><tr><th>普通方法</th><th>Lambda</th></tr></thead>
+<tbody>
+<tr><td>有名字</td><td>没名字</td></tr>
+<tr><td>必须先定义后调用</td><td>可以"现造现用"</td></tr>
+<tr><td>参数列表 <code>(int n)</code></td><td>参数列表 <code>n =&gt;</code></td></tr>
+<tr><td>函数体 <code>{ return ...; }</code></td><td>函数体 <code>...</code>（在 <code>=&gt;</code> 后）</td></tr>
+</tbody>
+</table>
+
+<p>既然是值，它就能：</p>
+<pre><code>Func&lt;int, int&gt; f = n =&gt; n * 2;       // ✅ 赋值给变量
+list.Where(n =&gt; n &gt; 5);              // ✅ 作为参数
+return n =&gt; n + 5;                   // ✅ 从方法 return（下一节）</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="s11">11. 方法可以 return lambda（函数工厂）</h2>
+
+<pre><code>public static Func&lt;int, int&gt; AddBy(int amount)
+{
+    return n =&gt; n + amount;
+}
+
+Func&lt;int, int&gt; add5 = AddBy(5);     // 工厂生产"加 5"的函数
+Func&lt;int, int&gt; add7 = AddBy(7);     // 工厂生产"加 7"的函数
+
+add5(100);   // → 105
+add7(100);   // → 107</code></pre>
+
+<h3>等价的"笨"写法（自己拆解出来的）</h3>
+
+<div class="quote">
+今天的精彩瞬间：「其实可以方法拆解为下面这样⬇️」
+</div>
+
+<pre><code>public static Func&lt;int, int&gt; AddBy(int amount)
+{
+    Func&lt;int, int&gt; x = n =&gt; n + amount;   // ← 先创建 lambda，存到变量 x
+    return x;                              // ← 再返回 x
+}</code></pre>
+
+<p>能这样拆，说明你看穿了：<strong><code>return n =&gt; n + amount;</code> 不是神奇语法，就是"return 一个值"，只不过这个值是 lambda。</strong></p>
+
+<div class="key">
+就像 <code>return 5;</code>（返回 int）、<code>return "hi";</code>（返回 string），<br>
+<code>return n =&gt; n + 5;</code>（返回 Func&lt;int,int&gt;）—— <u>三者地位完全平等</u>。
+</div>
+
+<!-- ============================================================ -->
+<h2 id="s12">12. Lambda 形参 = 等被调用时才拿值</h2>
+
+<div class="quote">
+卡点：「<code>return n =&gt; n + amount;</code> 这个 n 哪里来的？」
+</div>
+
+<p>这个 <code>n</code> 不是任何已存在变量。它是 lambda <u>自己声明的形参</u>，就像普通方法的形参：</p>
+
+<pre><code>int Foo(int n) { return n + 1; }   // 这个 n 也不是已存在变量
+                                    // 它是签名里的形参，等调用者传值
+n =&gt; n + 1                          // lambda 的 n 完全一样</code></pre>
+
+<h3>时间线（用 AddBy(5) → add5(100) 举例）</h3>
+
+<table>
+<thead><tr><th>时间</th><th>事件</th><th><code>n</code> 的状态</th></tr></thead>
+<tbody>
+<tr><td>1</td><td><code>AddBy(5)</code> 进入</td><td><code>n</code> 不存在</td></tr>
+<tr><td>2</td><td><code>return n =&gt; n + amount;</code></td><td><code>n</code> 是占位符（参数声明）</td></tr>
+<tr><td>3</td><td><code>add5 = ...</code> 赋值</td><td><code>n</code> 还是占位符</td></tr>
+<tr><td>4</td><td><strong><code>add5(100)</code> 调用</strong></td><td><strong><code>n</code> 终于 = 100</strong></td></tr>
+<tr><td>5</td><td>执行 <code>n + amount</code></td><td><code>100 + 5</code> = 105</td></tr>
+</tbody>
+</table>
+
+<div class="key">
+<strong>钉到脑子里：</strong>Lambda 是"还没被调用的函数"。参数 <code>n</code> 在调用之前是<u>占位符</u>。
+</div>
+
+<!-- ============================================================ -->
+<h2 id="s13">13. 闭包初探（捕获外层变量）</h2>
+
+<p>看 <code>AddBy</code> 的奇怪之处：</p>
+
+<pre><code>public static Func&lt;int, int&gt; AddBy(int amount)
+{
+    return n =&gt; n + amount;   // ← 用到了 amount
+}
+
+Func&lt;int, int&gt; add5 = AddBy(5);
+// AddBy 调用结束了，按理说局部变量 amount 应该消失
+// 但 add5(100) 居然还能算出 105 —— amount 被"记住"了！</code></pre>
+
+<div class="key">
+<strong>这就是闭包（closure）：</strong>Lambda "捕获"了它外层作用域的变量，即使外层方法已返回，lambda 还能访问这些变量。
+</div>
+
+<p>闭包是函数式编程的核心，今天先记住名字，将来专门讲。</p>
+
+<!-- ============================================================ -->
+<h2 id="s14">14. AndThen — 函数组合</h2>
+
+<pre><code>public static Func&lt;int, int&gt; AndThen(
+    this Func&lt;int, int&gt; first,
+    Func&lt;int, int&gt; second)
+{
+    return n =&gt; second(first(n));
+}
+
+Func&lt;int, int&gt; addOne  = x =&gt; x + 1;
+Func&lt;int, int&gt; times10 = x =&gt; x * 10;
+
+addOne.AndThen(times10)(5);   // → (5+1)*10  = 60
+times10.AndThen(addOne)(5);   // → (5*10)+1  = 51   注意顺序不同！</code></pre>
+
+<h3>慢动作回放：<code>addOne.AndThen(times10)</code></h3>
+
+<pre><code>Step 1: addOne.AndThen(times10) 进入 AndThen
+        first  = addOne
+        second = times10
+
+Step 2: 创建 lambda：n =&gt; times10(addOne(n))
+        （first、second 被闭包捕获）
+
+Step 3: 返回 lambda 给 combined
+
+Step 4: combined(5)
+        → times10(addOne(5))
+        → times10(6)
+        → 60</code></pre>
+
+<h3>链式 pipeline</h3>
+<pre><code>Func&lt;int, int&gt; pipeline = addOne
+    .AndThen(times10)
+    .AndThen(x =&gt; x - 5);
+
+pipeline(5);   // ((5+1)*10) - 5 = 55</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="s15">15. 为什么 <code>second(first(n))</code> 不能改成 <code>first(second(n))</code></h2>
+
+<div class="quote">
+今天的精彩调试：曾经想把方法体改成 <code>return n =&gt; first(second(n));</code>，被否决了。
+</div>
+
+<p><strong>原因：方法名是 <code>AndThen</code>（然后），语义是"先 a，<u>然后</u> b"。必须让名字和执行顺序一致。</strong></p>
+
+<pre><code>return n =&gt; second(first(n));
+//                 ────────
+//                 最内层 = 最先执行 = "first"</code></pre>
+
+<div class="key">
+<strong>记住：</strong>C# 求值顺序 = 从内层括号往外。<br>
+所以"想让谁先执行"，就把它放在最内层。<br>
+名字叫 <code>first</code> 的那个，<u>必须</u>放在最内层，否则名字就反了。
+</div>
+
+<!-- ============================================================ -->
+<h2 id="s16">16. 扩展方法 = 自动传 + 显式传</h2>
+
+<div class="quote">
+今天的关键顿悟：「<code>AndThen</code> 里面其实是有 2 个参数的，但实际 call 时（）里面只有一个。first 通过 <code>s.AndThen(t)</code> 的 s 传递进去。t 是 second。」
+</div>
+
+<p>完全正确！这就是扩展方法的核心机制：</p>
+
+<pre><code>public static Func&lt;int, int&gt; AndThen(
+    this Func&lt;int, int&gt; first,    // ← 第 1 个参数（带 this）
+    Func&lt;int, int&gt; second)         // ← 第 2 个参数（普通）
+
+// 调用：
+s.AndThen(t)
+// │       │
+// │       └── 显式传 → 接收方是 second
+// └── 自动塞给 this 参数 → 接收方是 first
+
+// 编译器实际生成：
+ExtensionsClass.AndThen(s, t);
+//                      ↑  ↑
+//                   first  second</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="s17">17. 实战练习中暴露的语法盲点</h2>
+
+<h3>陷阱 ①：返回类型对不上</h3>
+<pre><code>// ❌ 写错的版本
+public static string WordCount(this string words) =&gt; words.Length;
+//                   ↑                                ↑
+//                返回 string                       返回的是 int
+
+// ✅ 正确
+public static int WordCount(this string sentence) =&gt;
+    sentence.Split(' ').Length;</code></pre>
+
+<h3>陷阱 ②：<code>IEnumerable&lt;T&gt;</code> 没有 <code>.Length</code> 也没有 <code>.Count</code> 属性</h3>
+
+<pre><code>// ❌ 写错的版本
+public static int Average2(this IEnumerable&lt;int&gt; y)
+{
+    int sum = 0;
+    foreach (int x in y) sum += x;
+    return sum / y.Length;   // ❌ IEnumerable 没有 Length！
+}
+
+// ✅ 正确：边遍历边计数
+public static int Average2(this IEnumerable&lt;int&gt; nums)
+{
+    int sum = 0, count = 0;
+    foreach (int x in nums) { sum += x; count++; }
+    return sum / count;
+}</code></pre>
+
+<h3>长度三表（重要参考）</h3>
+<table>
+<thead><tr><th>类型</th><th>怎么拿长度</th><th>类型</th></tr></thead>
+<tbody>
+<tr><td><code>int[]</code> / <code>string</code></td><td><code>.Length</code></td><td>属性</td></tr>
+<tr><td><code>List&lt;T&gt;</code> / <code>Dictionary&lt;K,V&gt;</code> / <code>HashSet&lt;T&gt;</code></td><td><code>.Count</code></td><td>属性</td></tr>
+<tr><td><code>IEnumerable&lt;T&gt;</code></td><td><code>.Count()</code></td><td>LINQ 方法（遍历整个序列）</td></tr>
+</tbody>
+</table>
+
+<div class="danger">
+<strong>原因：</strong><code>IEnumerable&lt;T&gt;</code> 可能是<u>无限</u>序列，所以没有"长度"的概念。
+</div>
+
+<!-- ============================================================ -->
+<h2 id="s18">18. 自测题（明天复习用）</h2>
+
+<h3>扩展方法</h3>
+<ol>
+  <li>扩展方法的三条铁律是什么？</li>
+  <li><code>n.IsEven()</code> 编译后等价于什么静态调用？</li>
+  <li>编译器靠什么定位扩展方法？（不是 class 名字）</li>
+  <li>两个 class 都定义了 <code>IsEven(this int n)</code>，同时 <code>using</code> 它们会怎样？</li>
+  <li>能给委托类型（如 <code>Func&lt;int, bool&gt;</code>）写扩展方法吗？写一个签名示例。</li>
+</ol>
+
+<h3>=&gt; 语法</h3>
+<ol start="6">
+  <li><code>public Func&lt;int,int&gt; F(int n) =&gt; x =&gt; x + n;</code> —— 两个 <code>=&gt;</code> 分别是什么？</li>
+  <li>表达式体 <code>=&gt;</code> 后面能写代码块 <code>{ ... }</code> 吗？</li>
+  <li><code>public string Name =&gt; "Tom";</code> 这里的 <code>=&gt;</code> 是什么？</li>
+</ol>
+
+<h3>Lambda</h3>
+<ol start="9">
+  <li>Lambda <code>n =&gt; n + 5</code> 和方法 <code>int Add5(int n) { return n + 5; }</code> 有什么关系？</li>
+  <li><code>Func&lt;int,int&gt; f = AddBy(7);</code> 调用结束、还没用 <code>f</code> 时，lambda 里的 <code>n</code> 是什么？</li>
+  <li><code>AddBy(7)</code> 返回的 lambda 怎么"记住"了 7 这个值？这种现象叫什么？</li>
+  <li>把 <code>return n =&gt; n + amount;</code> 拆成两行等价代码。</li>
+</ol>
+
+<h3>函数组合</h3>
+<ol start="13">
+  <li><code>AndThen</code> 内部 <code>second(first(n))</code>，谁先执行？为什么不能改成 <code>first(second(n))</code>？</li>
+  <li><code>times10.AndThen(addOne)</code> 应用到 <code>5</code> 等于多少？</li>
+  <li>用 <code>addOne</code>、<code>times10</code>、<code>x =&gt; x - 5</code> 组合一个 pipeline，作用到 5 等于 55，怎么写？</li>
+</ol>
+
+<h3>语法盲点</h3>
+<ol start="16">
+  <li><code>List&lt;T&gt;</code>、<code>int[]</code>、<code>IEnumerable&lt;T&gt;</code> 三种类型分别怎么取长度？</li>
+  <li>为什么 <code>List&lt;T&gt;</code> 没定义 <code>Where</code>，<code>list.Where(...)</code> 还能工作？</li>
+</ol>
+
+<div class="back" style="margin-top: 50px;">
+<a href="../dailyread.html">← 返回首页</a> &nbsp;|&nbsp;
+<a href="../2026-05-14/ExtensionMethods-Practice.cs">查看配套代码</a> &nbsp;|&nbsp;
+<a href="../csharp-syntax-cheatsheet.html">查看语法速查</a>
+</div>
+
+</body>
+</html>
