@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>2026-05-21 · DI + ILogger 实操 + Lambda 拆解</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; max-width: 860px; margin: 40px auto; padding: 0 24px 80px; line-height: 1.75; color: #1f2328; background: #fbfbfb; }
+  h1 { border-bottom: 3px solid #1a7f37; padding-bottom: 8px; color: #1a7f37; }
+  h2 { border-left: 4px solid #1a7f37; padding-left: 10px; margin-top: 34px; color: #1f2328; font-size: 1.3em; }
+  h3 { color: #1a7f37; margin-top: 22px; font-size: 1.08em; }
+  code { background: #eef2f6; padding: 2px 6px; border-radius: 4px; font-family: "Consolas", monospace; font-size: 0.94em; color: #cf222e; }
+  pre { background: #1f2328; color: #e6edf3; padding: 12px 16px; border-radius: 8px; overflow-x: auto; font-size: 0.86em; }
+  pre code { background: none; color: inherit; padding: 0; }
+  .key { background: #ddf4ff; border-left: 4px solid #0969da; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .note { background: #fff8c5; border-left: 4px solid #d4a72c; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .danger { background: #ffebe9; border-left: 4px solid #cf222e; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .ok-box { background: #dafbe1; border-left: 4px solid #1a7f37; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  a { color: #0969da; text-decoration: none; } a:hover { text-decoration: underline; }
+  .back { font-size: 0.9em; color: #57606a; margin-bottom: 16px; }
+  .meta { color: #57606a; font-size: 0.9em; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; }
+  th, td { border: 1px solid #d0d7de; padding: 6px 10px; text-align: left; vertical-align: top; }
+  th { background: #f6f8fa; }
+</style>
+</head>
+<body>
+
+<div class="back"><a href="../dailyread.html">返回首页</a></div>
+
+<h1>DI + ILogger 实操 + Lambda 三层拆解</h1>
+<p class="meta">2026-05-21 · 5 分钟复习 · 配套：<a href="../2026-05-21/DI-Logging-HandsOn-And-Lambda-Summary.md">完整 Summary（22 题）</a> · <a href="../2026-05-21/DI-ILogger-Fundamentals-Summary.md">晨间理论</a> · <a href="../2026-05-21/DI-Logging-MinHost/Program.cs">Program.cs</a> · <a href="../2026-05-21/DI-Logging-MinHost/TemperatureSensorService.cs">Service 代码</a></p>
+
+<div class="ok-box">
+<strong>今天主线：</strong>晨间把 DI + ILogger + 三种生命周期建好心智模型 → 午后写出第一个能跑的 DI 项目（<code>ServiceCollection</code> + <code>AddLogging</code> + <code>AddTransient</code> + <code>GetRequiredService</code>）→ 下午把卡了半天的 <code>services.AddLogging(builder =&gt; {...})</code> 这一行从“烧脑”拆到“透明”：lambda、泛型委托、扩展方法三层全打通。<br>
+<strong>结果：</strong>第一次跑通 DI 容器，看到了 <code>info:</code> / <code>warn:</code> 真实日志输出。
+</div>
+
+<h2>1. 业务数据 vs 依赖项</h2>
+<table>
+<thead><tr><th>角色</th><th>放哪里</th><th>例子</th></tr></thead>
+<tbody>
+<tr><td>业务数据（business data）</td><td>方法参数</td><td><code>Order order</code>、<code>double celsius</code></td></tr>
+<tr><td>依赖项（dependency）</td><td>构造函数参数 → 私有只读字段</td><td><code>ILogger&lt;T&gt;</code>、<code>IOrderRepository</code></td></tr>
+</tbody>
+</table>
+
+<div class="key">
+DI 不是“类不声明依赖”，而是 <strong>类清晰声明依赖，但不创建具体依赖</strong>。构造函数说“我需要什么”，容器说“我给你”。
+</div>
+
+<h2>2. 最小 DI host（6 步）</h2>
+<pre><code>using DI_Logging_MinHost;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+
+// 1. 建注册清单
+var services = new ServiceCollection();
+
+// 2. 注册日志基础设施（console 输出）
+services.AddLogging(builder =&gt;
+{
+    builder.AddConsole();
+    builder.SetMinimumLevel(LogLevel.Information);
+});
+
+// 3. 注册业务服务
+services.AddTransient&lt;TemperatureSensorService&gt;();
+
+// 4. 构建容器（registration → container）
+using var provider = services.BuildServiceProvider();
+
+// 5. 从容器解析对象（这一步才真正创建对象）
+var sensor = provider.GetRequiredService&lt;TemperatureSensorService&gt;();
+
+// 6. 调用业务方法
+sensor.Record(72.5);
+sensor.Record(101.3);</code></pre>
+
+<div class="key">
+<code>AddTransient&lt;T&gt;()</code> <strong>不会立刻创建</strong> <code>T</code>，只是注册“以后能 new、用什么 lifetime”。真正创建发生在 <code>GetRequiredService&lt;T&gt;()</code>，容器读取构造函数自动注入依赖。
+</div>
+
+<h2>3. ILogger&lt;T&gt; 与结构化日志</h2>
+<pre><code>public sealed class TemperatureSensorService
+{
+    private readonly ILogger&lt;TemperatureSensorService&gt; _logger;
+
+    public TemperatureSensorService(ILogger&lt;TemperatureSensorService&gt; logger)
+    {
+        _logger = logger;             // 构造函数注入
+    }
+
+    public void Record(double reading)
+    {
+        // ✅ 结构化日志（structured logging）：保留字段名 + 字段值
+        _logger.LogInformation("The temperature sensor reported {Reading}", reading);
+
+        if (reading &gt; 100)
+            _logger.LogWarning("Temperature is too high: {Reading}", reading);
+    }
+}</code></pre>
+
+<div class="danger">
+<strong>易踩坑：</strong><br>
+1. <code>$"...{reading}"</code> 是字符串插值 → 日志里只剩文本，<strong>结构化字段丢失</strong>。<br>
+2. <code>"...{Reading}", reading</code> 才是结构化日志 → 保留 <code>Reading</code> 字段名和值。<br>
+3. <code>ILogger&lt;T&gt;</code> 的 <code>T</code> 是<strong>日志类别（log category）</strong>，不是消息类型！
+</div>
+
+<h3>结构化日志按位置匹配，不按变量名</h3>
+<pre><code>_logger.LogInformation("User {UserId} ordered {OrderId}", orderId, userId);
+// {UserId}  → orderId  (按位置)
+// {OrderId} → userId   (按位置)
+// 字段错位 → 写反顺序会日志串数据</code></pre>
+
+<h2>4. 三种 Service Lifetime 决策树</h2>
+<table>
+<thead><tr><th>Lifetime</th><th>创建时机</th><th>典型用法</th></tr></thead>
+<tbody>
+<tr><td><code>Transient</code></td><td>每次 resolve 都新建</td><td>轻量无状态计算器</td></tr>
+<tr><td><code>Scoped</code></td><td>同 scope 内一个实例（Web API 默认 = per HTTP request）</td><td><code>CurrentUserContext</code>、<code>DbContext</code></td></tr>
+<tr><td><code>Singleton</code></td><td>整个容器一个实例（应用关闭时 dispose）</td><td><code>SemaphoreSlim(10)</code> 全局限流器、配置缓存</td></tr>
+</tbody>
+</table>
+
+<div class="danger">
+<strong>两个真实陷阱：</strong><br>
+1. <code>CurrentUserContext</code> 注册成 <code>Singleton</code> → Alice 的 UserId 会泄漏给 Bob，<strong>严重安全风险</strong>。<br>
+2. <code>SemaphoreSlim(10)</code> 注册成 <code>Scoped</code> → 每个 request 自己 10 个并发，<strong>全局限制失效</strong>。
+</div>
+
+<div class="key">
+<strong>Scoped ≠ per user</strong>。默认 scope = per HTTP request。用户身份跨请求由 cookie / JWT / session 保存，<strong>不是</strong>靠 Scoped 对象长期活着。
+</div>
+
+<h2>5. Lambda 三件套 ⭐ 今天的最大收获</h2>
+<pre><code>Action&lt;int&gt; log = n =&gt; Console.WriteLine(n);
+//     <span style="color:#79c0ff">&lt;&gt;</span>              <span style="color:#79c0ff">↑参数</span>  <span style="color:#79c0ff">↑方法体</span>
+log(42);
+// <span style="color:#79c0ff">()</span> 委托调用</code></pre>
+
+<table>
+<thead><tr><th>语法</th><th>本质</th></tr></thead>
+<tbody>
+<tr><td><code>Action</code></td><td>无参、无返回值的委托类型</td></tr>
+<tr><td><code>Action&lt;T&gt;</code></td><td>接受一个 T、无返回值的委托类型（泛型）</td></tr>
+<tr><td>lambda 参数 <code>n</code></td><td>由 lambda 自身定义；类型从委托签名推断</td></tr>
+<tr><td>没有 <code>return</code></td><td>因为 <code>Action&lt;T&gt;</code> 返回 <code>void</code>，<strong>不是错误</strong></td></tr>
+<tr><td>没有 <code>{}</code></td><td>表达式 lambda（expression lambda），只有单一表达式</td></tr>
+</tbody>
+</table>
+
+<h3>烧脑点 1：<code>builder</code> 是哪儿定义的？</h3>
+<pre><code>services.AddLogging(builder =&gt;
+{
+    builder.AddConsole();
+});</code></pre>
+
+<div class="key">
+<code>builder</code> <strong>不是</strong>“缺乏定义”，它是 lambda 自己的参数。类型从 <code>AddLogging</code> 的签名 <code>Action&lt;ILoggingBuilder&gt;</code> 推断为 <code>ILoggingBuilder</code>。等价于写命名方法：
+<pre><code>void Configure(ILoggingBuilder builder) { builder.AddConsole(); }
+services.AddLogging(Configure);</code></pre>
+</div>
+
+<h3>烧脑点 2：lambda 是谁在调用？</h3>
+<pre><code>// AddLogging 内部大致这样（伪代码）：
+public static IServiceCollection AddLogging(
+    this IServiceCollection services,
+    Action&lt;ILoggingBuilder&gt; configure)
+{
+    var b = new LoggingBuilder(services);
+    configure(b);     // ← 你的 lambda 这一刻才执行
+    return services;
+}</code></pre>
+
+<div class="key">
+这叫<strong>配置回调（configuration callback）</strong>：框架内部 new 出 builder，然后调用你的 lambda 让你配置它。
+</div>
+
+<h2>6. <code>&lt;&gt;</code> vs <code>()</code> 终极区分 ⚠️</h2>
+<table>
+<thead><tr><th>符号</th><th>用途</th><th>例子</th></tr></thead>
+<tbody>
+<tr><td><code>&lt;&gt;</code></td><td>泛型类型实参 —— 给“类型”加类型参数</td><td><code>List&lt;int&gt;</code>、<code>Action&lt;int&gt;</code>、<code>ILogger&lt;OrderService&gt;</code></td></tr>
+<tr><td><code>()</code></td><td>调用括号 —— 给“方法/委托”传值参数</td><td><code>WriteLine(x)</code>、<code>log(42)</code>、<code>AddLogging(b =&gt; ...)</code></td></tr>
+</tbody>
+</table>
+
+<div class="danger">
+<code>Action&lt;int&gt;</code> 是<strong>类型</strong>，不是方法签名。所以是 <code>&lt;int&gt;</code>，<strong>不能</strong>写成 <code>Action(int x)</code>。
+</div>
+
+<h2>7. 扩展方法（extension method）—— <code>this</code> 在哪？</h2>
+<pre><code>public static class StringExtensions
+{
+    public static int LengthSquared(this string s) =&gt; s.Length * s.Length;
+    //                              ↑↑↑↑ 关键：把这个方法变成扩展方法
+}
+
+"hello".LengthSquared();
+// 编译期改写为：StringExtensions.LengthSquared("hello");</code></pre>
+
+<div class="key">
+<code>this</code> <strong>写在定义里的第一个参数前</strong>，<strong>调用时不写</strong>。<code>services.AddLogging(...)</code> 不写 <code>this</code>，是因为 <code>AddLogging</code> 的定义里已经写了 <code>this IServiceCollection services</code>。
+</div>
+
+<h2>8. 跑起来的真实输出</h2>
+<pre><code>info: DI_Logging_MinHost.TemperatureSensorService[0]
+      The temperature sensor reported 72.5
+info: DI_Logging_MinHost.TemperatureSensorService[0]
+      The temperature sensor reported 101.3
+warn: DI_Logging_MinHost.TemperatureSensorService[0]
+      Temperature is too high: 101.3</code></pre>
+
+<table>
+<thead><tr><th>段</th><th>含义</th></tr></thead>
+<tbody>
+<tr><td><code>info</code> / <code>warn</code></td><td>日志等级（log level）</td></tr>
+<tr><td><code>DI_Logging_MinHost.TemperatureSensorService</code></td><td>日志类别（来自 <code>ILogger&lt;TemperatureSensorService&gt;</code>）</td></tr>
+<tr><td><code>[0]</code></td><td>事件 ID（EventId）</td></tr>
+<tr><td>消息正文</td><td>消息模板填上参数后的结果</td></tr>
+</tbody>
+</table>
+
+<h2>9. 今天反复踩的坑</h2>
+<div class="danger">
+<ul>
+<li><code>ILogger&lt;T&gt;</code> 的 <code>T</code> 不是消息类型，是日志类别</li>
+<li>同一段顶层语句里 <code>var services = ...</code> 不能重复声明（笔记要写注释）</li>
+<li>字符串插值 vs 结构化日志：<code>$"...{x}"</code> 会丢失结构化字段</li>
+<li>结构化日志按位置匹配，写反顺序会数据串</li>
+<li><code>Scoped</code> ≠ per user，默认 per HTTP request</li>
+<li><code>Action&lt;int&gt;</code> 是类型，类型参数用 <code>&lt;&gt;</code>，不是 <code>()</code></li>
+<li>lambda 参数 <code>builder</code> 不是“缺乏定义”，是 lambda 自身定义</li>
+<li>lambda 没 <code>return</code> 不是错误，是 <code>Action&lt;T&gt;</code> 返回 <code>void</code></li>
+<li>扩展方法的 <code>this</code> 写在定义里，调用时不写</li>
+<li><code>dotnet build</code> 必须在含 <code>.csproj</code> 的目录运行（今天遇到 csproj 误进 bin 的事故）</li>
+</ul>
+</div>
+
+<h2>10. 一句话压缩</h2>
+<div class="ok-box">
+<strong>DI：</strong> 类声明依赖，容器创建依赖。<br>
+<strong>ILogger&lt;T&gt;：</strong> <code>T</code> = 日志类别；消息和字段来自 <code>LogXxx(...)</code> 的模板和参数。<br>
+<strong>Lifetime：</strong> 请求级 → Scoped；全应用共享 → Singleton；轻量无状态 → Transient。<br>
+<strong>Lambda：</strong> 没有名字的方法。参数由委托签名推断，<code>Action&lt;T&gt;</code> 不要 return。<br>
+<strong>&lt;&gt; vs ()：</strong> <code>&lt;&gt;</code> 给类型加类型参数；<code>()</code> 给方法/委托加调用参数。<br>
+<strong>扩展方法：</strong> <code>this</code> 写在定义里，调用时省略；编译期把点语法改写成静态方法调用。
+</div>
+
+</body>
+</html>
