@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>2026-05-15 · Delegates 深入 + Event 引入</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; max-width: 860px; margin: 40px auto; padding: 0 24px 80px; line-height: 1.75; color: #1f2328; background: #fbfbfb; }
+  h1 { border-bottom: 3px solid #1a7f37; padding-bottom: 8px; color: #1a7f37; }
+  h2 { border-left: 4px solid #1a7f37; padding-left: 10px; margin-top: 34px; color: #1f2328; font-size: 1.3em; }
+  h3 { color: #1a7f37; margin-top: 22px; font-size: 1.08em; }
+  code { background: #eef2f6; padding: 2px 6px; border-radius: 4px; font-family: "Consolas", monospace; font-size: 0.94em; color: #cf222e; }
+  pre { background: #1f2328; color: #e6edf3; padding: 12px 16px; border-radius: 8px; overflow-x: auto; font-size: 0.86em; }
+  pre code { background: none; color: inherit; padding: 0; }
+  .key { background: #ddf4ff; border-left: 4px solid #0969da; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .note { background: #fff8c5; border-left: 4px solid #d4a72c; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .ok-box { background: #dafbe1; border-left: 4px solid #1a7f37; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  a { color: #0969da; text-decoration: none; } a:hover { text-decoration: underline; }
+  .back { font-size: 0.9em; color: #57606a; margin-bottom: 16px; }
+  .meta { color: #57606a; font-size: 0.9em; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; }
+  th, td { border: 1px solid #d0d7de; padding: 6px 10px; text-align: left; vertical-align: top; }
+  th { background: #f6f8fa; }
+</style>
+</head>
+<body>
+
+<div class="back"><a href="../dailyread.html">返回首页</a></div>
+
+<h1>Delegates 深入 + Event 引入</h1>
+<p class="meta">2026-05-15 · 5 分钟复习 · 配套：<a href="../2026-05-15/Delegates-Deep-Dive.cs">Delegates-Deep-Dive.cs</a> / <a href="../2026-05-15/Events-Fundamentals.cs">Events-Fundamentals.cs</a></p>
+
+<div class="ok-box">
+<strong>今天主线：</strong>把 委托（delegate）当成"能存方法的类型"，然后引出 事件（event）—— 一个受控的 delegate 订阅入口。
+</div>
+
+<h2>1. 类型（type）的本质</h2>
+<p>类型告诉编译器两件事：</p>
+<ul>
+  <li>变量能<strong>存什么</strong>。</li>
+  <li>变量能<strong>做什么操作</strong>。</li>
+</ul>
+<div class="key"><code>delegate</code> 不是方法本身，而是一个能"指向方法 + 调用方法"的对象。</div>
+
+<h2>2. delegate 的定义</h2>
+<pre><code>public delegate int MathOperation(int a, int b);</code></pre>
+<p>这定义了一种<strong>委托类型（delegate type）</strong>：能存"两个 int 进、一个 int 出"的方法。</p>
+
+<pre><code>MathOperation op = Add;       // 把方法赋给委托变量
+int r = op(3, 5);             // 通过委托调用方法</code></pre>
+
+<h2>3. 内置三大委托类型</h2>
+<table>
+<thead><tr><th>类型</th><th>形状</th><th>典型用途</th></tr></thead>
+<tbody>
+<tr><td><code>Action&lt;T&gt;</code></td><td>T 进，无返回</td><td>做一件事，没返回</td></tr>
+<tr><td><code>Func&lt;T, TResult&gt;</code></td><td>T 进，TResult 出</td><td>从 T 算出 TResult</td></tr>
+<tr><td><code>Predicate&lt;T&gt;</code></td><td>T 进，bool 出</td><td>判断条件</td></tr>
+</tbody>
+</table>
+
+<h2>4. event 为什么需要</h2>
+<p>把 delegate 字段开放给外部，三种方案对比：</p>
+<table>
+<thead><tr><th>写法</th><th>问题</th></tr></thead>
+<tbody>
+<tr><td><code>public Action&lt;string&gt;? OrderCompleted;</code></td><td>太危险：外部能 <code>=null</code>、覆盖、伪造触发</td></tr>
+<tr><td><code>private Action&lt;string&gt;? orderCompleted;</code></td><td>太封闭：外部无法订阅</td></tr>
+<tr><td><code>public event Action&lt;string&gt;? OrderCompleted;</code></td><td>刚好：只允许 <code>+=</code> / <code>-=</code></td></tr>
+</tbody>
+</table>
+
+<div class="key">event 的本质 = <strong>受控的 delegate</strong>。外部只能订阅/取消，触发权留给类自己。</div>
+
+<h2>5. 明天自测</h2>
+<ol>
+  <li><code>delegate</code> 和方法的区别是什么？</li>
+  <li><code>Func&lt;int, int, int&gt;</code> 描述什么形状的方法？</li>
+  <li>为什么 <code>public Action</code> 字段不安全？<code>event</code> 解决了什么？</li>
+</ol>
+
+</body>
+</html>

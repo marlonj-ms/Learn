@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>2026-05-18 · Event 流程图 + Async/Await 入门</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; max-width: 860px; margin: 40px auto; padding: 0 24px 80px; line-height: 1.75; color: #1f2328; background: #fbfbfb; }
+  h1 { border-bottom: 3px solid #1a7f37; padding-bottom: 8px; color: #1a7f37; }
+  h2 { border-left: 4px solid #1a7f37; padding-left: 10px; margin-top: 34px; color: #1f2328; font-size: 1.3em; }
+  h3 { color: #1a7f37; margin-top: 22px; font-size: 1.08em; }
+  code { background: #eef2f6; padding: 2px 6px; border-radius: 4px; font-family: "Consolas", monospace; font-size: 0.94em; color: #cf222e; }
+  pre { background: #1f2328; color: #e6edf3; padding: 12px 16px; border-radius: 8px; overflow-x: auto; font-size: 0.86em; }
+  pre code { background: none; color: inherit; padding: 0; }
+  .key { background: #ddf4ff; border-left: 4px solid #0969da; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .note { background: #fff8c5; border-left: 4px solid #d4a72c; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .ok-box { background: #dafbe1; border-left: 4px solid #1a7f37; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  a { color: #0969da; text-decoration: none; } a:hover { text-decoration: underline; }
+  .back { font-size: 0.9em; color: #57606a; margin-bottom: 16px; }
+  .meta { color: #57606a; font-size: 0.9em; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; }
+  th, td { border: 1px solid #d0d7de; padding: 6px 10px; text-align: left; vertical-align: top; }
+  th { background: #f6f8fa; }
+</style>
+</head>
+<body>
+
+<div class="back"><a href="../dailyread.html">返回首页</a></div>
+
+<h1>Event 流程图 + Async/Await 入门</h1>
+<p class="meta">2026-05-18 · 5 分钟复习 · 配套：<a href="../2026-05-18/Good-Design/Program.cs">Good-Design</a> / <a href="../2026-05-18/Async-Demo/Program.cs">Async-Demo</a> / <a href="../2026-05-18/Event-Flow-Reference.md">Event-Flow-Reference.md</a></p>
+
+<div class="ok-box">
+<strong>今天主线：</strong>用 Bad/Good/Your 三种设计对比 event 标准模式，然后进入 异步等待（async/await）的心智模型 + 顺序 vs 并行运行。
+</div>
+
+<h2>1. Event 标准模式（生产推荐）</h2>
+<pre><code>public event EventHandler&lt;OrderCompletedEventArgs&gt;? OrderCompleted;
+
+public void CompleteOrder(string orderId)
+{
+    var args = new OrderCompletedEventArgs(orderId);
+    OnOrderCompleted(args);
+}
+
+protected virtual void OnOrderCompleted(OrderCompletedEventArgs e)
+{
+    OrderCompleted?.Invoke(this, e);
+}</code></pre>
+
+<div class="key">
+所有触发逻辑集中在 <code>OnXxx</code>，业务方法只构造 EventArgs 然后调它。子类可 override 注入额外行为。
+</div>
+
+<h2>2. Event 调用流程</h2>
+<pre><code>业务方法
+   ↓ 构造 EventArgs
+   ↓ 调 OnXxx(e)
+       ↓ 调 event?.Invoke(this, e)
+           ↓ 同步逐个调订阅者
+   ↓ 全部跑完后业务方法继续</code></pre>
+
+<div class="note">
+事件调用列表（invocation list）<strong>同步执行</strong>。一个 handler 抛异常，后面的 handler 可能不跑。
+</div>
+
+<h2>3. EventArgs 应该不可变（immutable）</h2>
+<pre><code>public sealed class OrderCompletedEventArgs : EventArgs
+{
+    public string OrderId { get; }                      // 只读属性
+    public OrderCompletedEventArgs(string orderId) { OrderId = orderId; }
+}</code></pre>
+
+<h2>4. Async/Await 三大要点</h2>
+<table>
+<thead><tr><th>关键字</th><th>含义</th></tr></thead>
+<tbody>
+<tr><td><code>async</code></td><td>声明这个方法<strong>可能</strong>包含 await，编译器把它编成状态机</td></tr>
+<tr><td><code>Task / Task&lt;T&gt;</code></td><td>"未来才会有的结果"</td></tr>
+<tr><td><code>await</code></td><td>"在这里挂起，等结果出来再继续，期间线程可以做别的事"</td></tr>
+</tbody>
+</table>
+
+<h2>5. 顺序 vs 并行（demo 重点）</h2>
+<pre><code>// 顺序：A 完了才开始 B，慢
+var a = await LoadAsync("A");
+var b = await LoadAsync("B");
+
+// 并行：A 和 B 同时开始，快
+var taskA = LoadAsync("A");
+var taskB = LoadAsync("B");
+await Task.WhenAll(taskA, taskB);</code></pre>
+
+<div class="key"><strong>口诀：</strong>"启动多个 Task，最后再 WhenAll"。这是 .NET 异步编程的肌肉记忆。</div>
+
+<h2>6. 明天自测</h2>
+<ol>
+  <li><code>protected virtual OnXxx</code> 为什么要存在？</li>
+  <li><code>EventArgs</code> 为什么倾向于 immutable + sealed？</li>
+  <li>为什么 <code>await</code> 不会阻塞线程？</li>
+  <li><code>Task.WhenAll</code> 和先后两个 <code>await</code> 的区别？</li>
+</ol>
+
+</body>
+</html>

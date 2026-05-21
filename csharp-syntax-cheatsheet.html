@@ -137,6 +137,10 @@
   <li><a href="#s16">扩展方法（Extension Methods）</a></li>
   <li><a href="#s17"><code>=&gt;</code> 三种身份对照</a></li>
   <li><a href="#s18">集合长度三表（Length / Count / Count()）</a></li>
+  <li><a href="#s19">LINQ 链路：管道思维 + 常用方法</a></li>
+  <li><a href="#s20">List.Sort + Comparison&lt;T&gt;</a></li>
+  <li><a href="#s21">Dictionary 计数模式（TryGetValue）</a></li>
+  <li><a href="#s22">反复踩的坑（持续累积）</a></li>
 </ol>
 </div>
 
@@ -795,6 +799,295 @@ public int Average2(IEnumerable&lt;int&gt; nums)
 // ✅ 也可以用 LINQ
 using System.Linq;
 int avg = nums.Sum() / nums.Count();</code></pre>
+
+<a class="back-top" href="#">↑ 回到顶部</a>
+
+<!-- ============================================================ -->
+<h2 id="s19">19. LINQ 链路：管道思维 + 常用方法</h2>
+
+<table>
+<thead><tr><th>方法</th><th>作用</th><th>lambda 形状</th></tr></thead>
+<tbody>
+<tr><td><code>Where</code></td><td>过滤</td><td><code>T → bool</code></td></tr>
+<tr><td><code>Select</code></td><td>投影/变换</td><td><code>T → TOut</code></td></tr>
+<tr><td><code>OrderBy / OrderByDescending</code></td><td>排序（不破坏原 list）</td><td><code>T → TKey</code></td></tr>
+<tr><td><code>First / FirstOrDefault</code></td><td>取第一个</td><td>可带 <code>T → bool</code></td></tr>
+<tr><td><code>Any / All</code></td><td>断言</td><td><code>T → bool</code></td></tr>
+<tr><td><code>Distinct</code></td><td>去重</td><td>（无）</td></tr>
+<tr><td><code>GroupBy</code></td><td>按 key 分组</td><td><code>T → TKey</code></td></tr>
+<tr><td><code>Sum / Max / Min / Count</code></td><td>聚合</td><td>可选 <code>T → 数值</code></td></tr>
+<tr><td><code>Aggregate</code></td><td>通用折叠</td><td><code>(acc, T) → acc</code></td></tr>
+</tbody>
+</table>
+
+<div class="danger">
+<strong>LINQ 链不放副作用！</strong>不要在 <code>Select</code> 里 <code>Console.WriteLine</code>。它们是<strong>延迟执行（deferred execution）</strong>的数据管道，foreach 才真正触发。打印放外层 foreach 里。
+</div>
+
+<pre><code>// ✅ 标准链式 + 打印分离
+foreach (var t in booklist.Where(b =&gt; b.Pages &gt; 500).Select(b =&gt; b.Title))
+{
+    Console.WriteLine(t);
+}
+
+// ✅ GroupBy 标准用法
+foreach (var g in booklist.GroupBy(b =&gt; b.Author))
+{
+    var titles = string.Join(", ", g.Select(b =&gt; b.Title));
+    Console.WriteLine($"{g.Key} ({g.Count()} books): {titles}");
+}
+
+// ✅ Aggregate 通用聚合
+int total = booklist.Aggregate(0, (acc, b) =&gt; acc + b.Pages);
+//                            ↑   ↑
+//                         种子  累加规则</code></pre>
+
+<a class="back-top" href="#">↑ 回到顶部</a>
+
+<!-- ============================================================ -->
+<h2 id="s20">20. List.Sort + Comparison&lt;T&gt;</h2>
+
+<pre><code>booklist.Sort((a, b) =&gt; a.Pages - b.Pages);   // 升序
+booklist.Sort((a, b) =&gt; b.Pages - a.Pages);   // 降序</code></pre>
+
+<table>
+<thead><tr><th>返回值</th><th>含义</th></tr></thead>
+<tbody>
+<tr><td>负数</td><td>a 排在 b 前</td></tr>
+<tr><td>0</td><td>相等</td></tr>
+<tr><td>正数</td><td>b 排在 a 前</td></tr>
+</tbody>
+</table>
+
+<div class="danger">
+<strong>常见错误：</strong>写成 <code>(a, b) =&gt; a.X &lt; b.X</code>（返回 bool）。<code>Comparison&lt;T&gt;</code> 要求返回 <code>int</code>，编译器报错。
+</div>
+
+<div class="note">
+<strong>OrderBy vs Sort：</strong><br>
+<code>list.OrderBy(...)</code> — LINQ 扩展方法，返回新序列，<u>原 list 不变</u>。<br>
+<code>list.Sort(...)</code> — List 实例方法，<u>原地排序</u>，原 list 顺序被改。
+</div>
+
+<div class="note"><strong>溢出陷阱：</strong>页数很大时 <code>a.X - b.X</code> 可能溢出。生产代码用 <code>a.X.CompareTo(b.X)</code> 更稳。</div>
+
+<a class="back-top" href="#">↑ 回到顶部</a>
+
+<!-- ============================================================ -->
+<h2 id="s21">21. Dictionary 计数模式（TryGetValue）</h2>
+
+<pre><code>var counts = new Dictionary&lt;string, int&gt;();
+foreach (var word in words)
+{
+    counts.TryGetValue(word, out int current);   // 不在时 current = 0
+    counts[word] = current + 1;                  // 在则改不在则插
+}</code></pre>
+
+<div class="key">
+<strong>关键 trick：</strong>key 不存在时 <code>out int current</code> 被赋为 <code>int</code> 的默认值 <code>0</code>，所以省掉 if/else。<br>
+<code>TryGetValue</code> 只读，<u>不会修改字典</u>。真正插入的是后面那行 <code>dict[k] = v</code>。
+</div>
+
+<h3>三种"更新或插入"的对比</h3>
+<table>
+<thead><tr><th>写法</th><th>key 不存在</th><th>key 已存在</th><th>哈希查找次数</th></tr></thead>
+<tbody>
+<tr><td><code>dict.Add(k, v)</code></td><td>✅ 插入</td><td>❌ 抛 ArgumentException</td><td>1</td></tr>
+<tr><td><code>dict[k] = v</code></td><td>✅ 插入</td><td>✅ 覆盖</td><td>1</td></tr>
+<tr><td><code>dict.TryAdd(k, v)</code></td><td>✅ 插入，返回 true</td><td>❌ 不改，返回 false</td><td>1</td></tr>
+<tr><td><code>if (ContainsKey(k)) ... else ...</code></td><td>分支处理</td><td>分支处理</td><td><strong>2</strong></td></tr>
+<tr><td><code>TryGetValue + 索引器赋值</code></td><td>用默认值 + 插</td><td>读出值 + 改</td><td>1</td></tr>
+</tbody>
+</table>
+
+<pre><code>// 索引器对 int 值的简写（在则改，不在则插入新 entry 值=1）
+if (counts.ContainsKey(w))
+    counts[w]++;            // 等价 counts[w] = counts[w] + 1
+else
+    counts.Add(w, 1);
+
+// 解构遍历（KeyValuePair 支持解构）
+foreach (var (key, value) in dict)
+{
+    Console.WriteLine($"{key}:{value}");
+}</code></pre>
+
+<a class="back-top" href="#">↑ 回到顶部</a>
+
+<!-- ============================================================ -->
+<h2 id="s22">22. 反复踩的坑（持续累积）</h2>
+
+<div class="danger">
+<strong>1. 私有字段只能类内访问</strong>
+<pre><code>// 在 Main 里
+var b = new Book(...);
+Console.WriteLine(b._title);   // ❌ 编译错误，私有
+Console.WriteLine(b.Title);    // ✅ 走 public 属性</code></pre>
+</div>
+
+<div class="danger">
+<strong>2. 插值字符串少了 <code>$</code></strong>
+<pre><code>Console.WriteLine("{x}");      // ❌ 打印字面 {x}
+Console.WriteLine($"{x}");     // ✅ 替换为 x 的值</code></pre>
+</div>
+
+<div class="danger">
+<strong>3. <code>string</code> 是 immutable，方法返回新串</strong>
+<pre><code>name.Join(...);                // ❌ 不会修改 name
+name = string.Join(", ", arr); // ✅ string.Join 是静态方法，要赋值</code></pre>
+</div>
+
+<div class="danger">
+<strong>4. lambda 参数名遮蔽外层变量</strong>
+<pre><code>foreach (var g in groups)
+{
+    string.Join(",", g.Select(g =&gt; g.Title));   // 内层 g 是 Book，遮蔽外层 IGrouping
+}
+// ✅ 改名避免歧义
+string.Join(",", g.Select(b =&gt; b.Title));</code></pre>
+</div>
+
+<div class="danger">
+<strong>5. 不能 foreach 一边删元素</strong>
+<pre><code>foreach (var x in list)
+{
+    if (cond) list.Remove(x);   // ❌ 运行时 InvalidOperationException
+}
+// ✅ 用 RemoveAll 或 反向 for 循环
+list.RemoveAll(x =&gt; cond);</code></pre>
+</div>
+
+<div class="danger">
+<strong>6. <code>'word'</code> 是 char 字面量，不是 string</strong>
+<pre><code>dict['word']    // ❌ 单引号里只能一个字符
+dict["word"]    // ✅ 字符串字面量
+dict[word]      // ✅ 变量（无引号）</code></pre>
+</div>
+
+<div class="danger">
+<strong>7. <code>EventHandler</code> 和 <code>EventHandler&lt;T&gt;</code> 不要混用</strong>
+<pre><code>public event EventHandler? Rang;                    // e 是 EventArgs
+public void OnRang(object? sender, DoorbellEventArgs e) { } // ❌ 签名不匹配
+
+// ✅ 三处 T 必须一致
+public event EventHandler&lt;DoorbellEventArgs&gt;? Rang;
+public void OnRang(object? sender, DoorbellEventArgs e) { }</code></pre>
+</div>
+
+<div class="danger">
+<strong>8. 想让 override 生效，父类方法必须调用 virtual 方法</strong>
+<pre><code>public void Press(string name)
+{
+  Rang?.Invoke(this, new DoorbellEventArgs(name)); // ❌ 绕过 OnRang，子类 override 不会执行
+}
+
+public void Press(string name)
+{
+  OnRang(new DoorbellEventArgs(name));             // ✅ 走 virtual dispatch
+}</code></pre>
+</div>
+
+<div class="danger">
+<strong>9. subscriber 不是 publisher 的子类</strong>
+<pre><code>public class Buzzer : TemperatureSensor { }  // ❌ Buzzer 不是一种 Sensor
+
+public class Buzzer                          // ✅ Buzzer 是监听者
+{
+  public void OnThresholdExceeded(object? sender, ThresholdExceededEventArgs e) { }
+}</code></pre>
+</div>
+
+<div class="danger">
+<strong>10. <code>var x = null;</code> 编译不过</strong>
+<pre><code>var captured = null;                              // ❌ null 没类型，编译器推不出
+ThresholdExceededEventArgs? captured = null;      // ✅ 显式声明可空类型</code></pre>
+</div>
+
+<div class="danger">
+<strong>11. 测试方法不能重载（xUnit1024）</strong>
+<pre><code>// 产品代码这样写合法，搬进测试类就报错
+[Theory] void Add_Works(int a, int b) { ... }           // ❌ xUnit1024
+[Theory] void Add_Works(double a, double b) { ... }
+
+// ✅ 改名让每个测试名唯一
+[Theory] void Add_Works_Int(int a, int b) { ... }
+[Theory] void Add_Works_Double(double a, double b) { ... }</code></pre>
+原因：<strong>xUnit 的 Roslyn 分析器</strong>报错（不是 C# 编译器），CI 用方法名作测试唯一 ID，重名撞车。
+</div>
+
+<div class="danger">
+<strong>12. <code>Assert.Throws&lt;T&gt;</code> 是精确类型匹配</strong>
+<pre><code>// 产品代码抛 ArgumentNullException（是 ArgumentException 的子类）
+Assert.Throws&lt;ArgumentException&gt;(...);       // ❌ FAIL，不精确匹配
+Assert.Throws&lt;ArgumentNullException&gt;(...);   // ✅ 精确匹配
+Assert.ThrowsAny&lt;ArgumentException&gt;(...);    // ✅ 接受子类</code></pre>
+</div>
+
+<div class="danger">
+<strong>13. <code>x == double.NaN</code> 永远 false</strong>
+<pre><code>if (x == double.NaN) { ... }      // ❌ 永远不进，IEEE 754: NaN != NaN
+if (double.IsNaN(x)) { ... }      // ✅ 唯一正确的 NaN 检查</code></pre>
+</div>
+
+<div class="danger">
+<strong>14. <code>=&gt;</code> 双重身份 —— 看位置区分</strong>
+<pre><code>Func&lt;int,int&gt; f = x =&gt; x * 2;     // 值的位置 → Lambda（匿名方法）
+public int X =&gt; 42;               // 成员声明位置 → 表达式体成员（{ return 42; }）</code></pre>
+两个 <code>=&gt;</code> 长得一样，意思完全不同。看出现在等号右边还是成员定义里来区分。
+</div>
+
+<div class="danger">
+<strong>15. <code>Assert.Equal(expected, actual)</code> 参数顺序铁律</strong>
+<pre><code>Assert.Equal(actual, expected);    // ❌ 反了
+Assert.Equal(expected, actual);    // ✅ expected 永远在前</code></pre>
+反了 xUnit 失败信息会误导："Expected: 100, Actual: 101"，但其实是你写错了顺序。
+</div>
+
+<div class="danger">
+<strong>16. <code>[MemberData]</code> 引用必须 <code>public static</code></strong>
+<pre><code>private static IEnumerable&lt;object[]&gt; Data =&gt; ...;     // ❌ 私有不行
+public IEnumerable&lt;object[]&gt; Data =&gt; ...;             // ❌ 实例成员不行
+public static IEnumerable&lt;object[]&gt; Data =&gt; ...;      // ✅</code></pre>
+另外 <code>new[] { 1, 2 }</code> 会推断成 <code>int[]</code>；<code>[MemberData]</code> 要 <code>object[]</code>，必须显式 <code>new object[] { ... }</code>。
+</div>
+
+<div class="danger">
+<strong>17. 本地变量 / 参数必须 camelCase</strong>
+<pre><code>void M(double sensortemp, bool shouldraise)    // ❌ 全小写拼接
+void M(double sensorTemp, bool shouldRaise)    // ✅ camelCase
+
+bool eventfired = false;                        // ❌
+bool eventFired = false;                        // ✅</code></pre>
+类 / 方法 / 属性是 PascalCase；字段（私有）是 <code>_camelCase</code>；常量是 PascalCase。
+</div>
+
+<div class="danger">
+<strong>18. 多目标 csproj：标签必须复数 + 分号</strong>
+<pre><code>❌ &lt;TargetFramework&gt;net10.0,net8.0&lt;/TargetFramework&gt;     // 逗号 + 单数
+❌ &lt;TargetFramework&gt;net10.0;net8.0&lt;/TargetFramework&gt;     // 分号对了，但还是单数
+✅ &lt;TargetFrameworks&gt;net10.0;net8.0&lt;/TargetFrameworks&gt;   // 复数 s + 分号</code></pre>
+错任何一处都报 <code>NETSDK1046</code>。报错信息会直接说 "use the 'TargetFrameworks' property instead" —— <strong>SDK 报错往往就是答案，认真读</strong>。
+</div>
+
+<div class="danger">
+<strong>19. <code>dotnet pack</code> 不填元数据 → 占位垃圾</strong>
+<pre><code>// 你没填 PackageId/Version/Authors/Description，pack 出来的 .nuspec 长这样：
+&lt;id&gt;TemperatureSensor.Core&lt;/id&gt;              // 取的项目名
+&lt;version&gt;1.0.0&lt;/version&gt;                     // 假设的
+&lt;authors&gt;TemperatureSensor.Core&lt;/authors&gt;    // 又取项目名
+&lt;description&gt;Package Description&lt;/description&gt;  // 字面占位字符串！</code></pre>
+<code>id / version / authors / description</code> 是 <strong>4 个必填字段</strong>。<code>dependencies</code> 可选。如果你上传 nuget.org 之前没改这些占位，所有用户搜到的都是"Package Description"。
+</div>
+
+<div class="danger">
+<strong>20. <code>&lt;Version&gt;</code> + <code>&lt;PackageReleaseNotes&gt;</code> + 注释是三方契约</strong>
+<pre><code>// 你把版本从 1.1.0 → 1.1.1（PATCH 表示纯 bug 修复）
+&lt;Version&gt;1.1.1&lt;/Version&gt;
+&lt;!-- ❌ 注释还停在旧版本 --&gt;
+&lt;!-- 1.1.0 → MINOR bump 加了新功能 --&gt;
+&lt;PackageReleaseNotes&gt;1.1.0: Added NaN validation&lt;/PackageReleaseNotes&gt;  // ❌ 也没改</code></pre>
+SemVer：<strong>PATCH</strong>（修 bug）/ <strong>MINOR</strong>（加功能 backward-compatible）/ <strong>MAJOR</strong>（破坏性改动）。三处要同步改，否则将来翻 git log 一脸懵。
+</div>
 
 <a class="back-top" href="#">↑ 回到顶部</a>
 

@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>2026-05-20 · Unit Testing 全栈 + NuGet 打包 + IL 预览</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; max-width: 860px; margin: 40px auto; padding: 0 24px 80px; line-height: 1.75; color: #1f2328; background: #fbfbfb; }
+  h1 { border-bottom: 3px solid #1a7f37; padding-bottom: 8px; color: #1a7f37; }
+  h2 { border-left: 4px solid #1a7f37; padding-left: 10px; margin-top: 34px; color: #1f2328; font-size: 1.3em; }
+  h3 { color: #1a7f37; margin-top: 22px; font-size: 1.08em; }
+  code { background: #eef2f6; padding: 2px 6px; border-radius: 4px; font-family: "Consolas", monospace; font-size: 0.94em; color: #cf222e; }
+  pre { background: #1f2328; color: #e6edf3; padding: 12px 16px; border-radius: 8px; overflow-x: auto; font-size: 0.86em; }
+  pre code { background: none; color: inherit; padding: 0; }
+  .key { background: #ddf4ff; border-left: 4px solid #0969da; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .note { background: #fff8c5; border-left: 4px solid #d4a72c; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .danger { background: #ffebe9; border-left: 4px solid #cf222e; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .ok-box { background: #dafbe1; border-left: 4px solid #1a7f37; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  a { color: #0969da; text-decoration: none; } a:hover { text-decoration: underline; }
+  .back { font-size: 0.9em; color: #57606a; margin-bottom: 16px; }
+  .meta { color: #57606a; font-size: 0.9em; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; }
+  th, td { border: 1px solid #d0d7de; padding: 6px 10px; text-align: left; vertical-align: top; }
+  th { background: #f6f8fa; }
+</style>
+</head>
+<body>
+
+<div class="back"><a href="../dailyread.html">返回首页</a></div>
+
+<h1>Unit Testing 全栈 + NuGet 打包 + IL 预览</h1>
+<p class="meta">2026-05-20 · 5 分钟复习 · 配套：<a href="../2026-05-20/Unit-Testing-Fundamentals-Summary.md">完整 Summary（83 题）</a> · <a href="../2026-05-20/TemperatureSensor.Core/TemperatureSensor.cs">Core 代码</a> · <a href="../2026-05-20/TemperatureSensor.Tests/TemperatureSensorTests.cs">Tests 代码</a> · <a href="../2026-05-20/TemperatureSensor.Core/TemperatureSensor.Core.csproj">csproj（含 NuGet 元数据）</a></p>
+
+<div class="ok-box">
+<strong>今天主线（上半天 · 测试）：</strong>从手写 PASS/FAIL → AAA 抽方法 → 建 .slnx + classlib + xunit 项目 → <code>[Fact]</code> + <code>Assert</code> → 红绿回归 → <code>[Theory] + [InlineData]</code> 补边界 → 对象 spy 验 payload → 改 EventArgs 触发 cycle 3 → 加 NaN/Infinity 防御 + <code>Assert.Throws&lt;T&gt;</code> → <code>[InlineData]</code> 升级 <code>[MemberData]</code>。<br>
+<strong>最终：16 个测试全过</strong>。<br><br>
+<strong>今天主线（下半天 · 生态）：</strong>DLL/API/SDK 概念清梳 → SemVer（PATCH/MINOR/MAJOR）→ <code>dotnet pack</code> 三轮（裸跑 / 加元数据 / 多目标）→ 看到 <code>lib/net8.0/</code> 和 <code>lib/net10.0/</code> 并排出现 → 装 <code>ilspycmd</code> 看 IL → <strong>IL 太密集，主动 defer</strong>。<br>
+<strong>明天起：committed 3-session 弧</strong>（ILogger+DI → Minimal REST API → Docker + 集成测试），冲 "0→1 production"。</div>
+
+<h2>1. AAA 模式 + xUnit 最小骨架</h2>
+<pre><code>[Fact]
+public void AboveThreshold_RaisesEvent()
+{
+    // Arrange — 建对象、订阅事件、准备标志变量
+    var sensor = new TemperatureSensor(threshold: 100.0);
+    bool eventFired = false;
+    sensor.ThresholdExceeded += (s, e) =&gt; eventFired = true;
+
+    // Act — 通常一行，触发被测路径
+    sensor.RecordReading(101);
+
+    // Assert — 自动判定 PASS/FAIL
+    Assert.True(eventFired);
+}</code></pre>
+
+<div class="key">
+xUnit 用 <strong>反射 + metadata</strong> 发现 <code>[Fact]</code> 方法，并给每个测试方法<strong>新建一个测试类实例</strong>，所以测试之间永远不会共享状态。
+</div>
+
+<h2>2. 解决方案 / 项目 / 引用</h2>
+<pre><code>TemperatureSensor.slnx                    ← 容器，不参与运行
+├── TemperatureSensor.Core/               ← classlib，无 Main，纯逻辑
+│   └── TemperatureSensor.cs              ← 零 Console.WriteLine
+└── TemperatureSensor.Tests/              ← xunit 模板 + ProjectReference
+    └── TemperatureSensorTests.cs</code></pre>
+
+<div class="key">
+产品代码<strong>没有 Main</strong>，必须被 host（控制台 / Web API / xUnit runner）消费。<strong>引用是给编译器的，反射才是 xUnit 用的。</strong>
+</div>
+
+<h2>3. [Theory] + [InlineData] —— 等价类覆盖</h2>
+<pre><code>[Theory]
+[InlineData(150.0, true)]      // above 等价类
+[InlineData(100.0, false)]     // boundary 边界（关键！）
+[InlineData( 50.0, false)]     // below 等价类
+public void RecordReading_...(double celsius, bool shouldRaise)
+{
+    var sensor = new TemperatureSensor(100.0);
+    bool fired = false;
+    sensor.ThresholdExceeded += (s, e) =&gt; fired = true;
+
+    sensor.RecordReading(celsius);
+
+    Assert.Equal(shouldRaise, fired);
+}</code></pre>
+
+<div class="danger">
+<strong>边界覆盖缺口</strong>：只测 99/101 没人守门 <code>&gt;</code> 还是 <code>&gt;=</code>。把 <code>100.0</code> 这个边界值放进 <code>[InlineData]</code> 才能抓住运算符变化。
+</div>
+
+<h2>4. 对象 spy + payload 验证</h2>
+<pre><code>ThresholdExceededEventArgs? captured = null;     // ← T? 声明可空
+sensor.ThresholdExceeded += (s, e) =&gt;
+{
+    eventFired = true;
+    captured = e;                                  // ← lambda 闭包扣留 e
+};
+
+sensor.RecordReading(101);
+
+Assert.NotNull(captured);
+Assert.Equal(101, captured!.Reading);              // ! = null-forgiving
+Assert.Equal(100, captured.Threshold);</code></pre>
+
+<div class="note">
+<code>captured = null</code> 不能写 <code>var captured = null;</code> —— <code>null</code> 没类型，编译器推不出来。必须显式声明 <code>ThresholdExceededEventArgs?</code>。
+</div>
+
+<div class="danger">
+<strong>测试盲点（test blind spot）</strong>：只检 <code>eventFired == true</code> 是"伪绿"。今天 cycle 3 把 <code>new ThresholdExceededEventArgs(celsius, _threshold, ...)</code> 反成 <code>(_threshold, celsius, ...)</code>，5 个测试里<strong>只有 1 个</strong>抓到，因为只有它在断言 <code>captured.Reading</code>。
+</div>
+
+<h2>5. Assert.Throws&lt;T&gt; —— 异常测试</h2>
+<pre><code>// 产品代码：防御性输入校验（快速失败）
+public void RecordReading(double celsius)
+{
+    if (double.IsNaN(celsius) || double.IsInfinity(celsius))
+    {
+        throw new ArgumentException(
+            "Reading must be a finite number.",
+            nameof(celsius));        // ← nameof 重构友好
+    }
+    if (celsius &gt; _threshold) OnThresholdExceeded(...);
+}
+
+// 测试
+[Fact]
+public void RecordReading_NaN_ThrowsArgumentException()
+{
+    var sensor = new TemperatureSensor(100.0);
+    Assert.Throws&lt;ArgumentException&gt;(() =&gt; sensor.RecordReading(double.NaN));
+}</code></pre>
+
+<table>
+<thead><tr><th>API</th><th>含义</th></tr></thead>
+<tbody>
+<tr><td><code>Assert.Throws&lt;T&gt;</code></td><td><strong>精确</strong>类型匹配，子类不算</td></tr>
+<tr><td><code>Assert.ThrowsAny&lt;T&gt;</code></td><td>接受 T 或其子类</td></tr>
+<tr><td>返回值</td><td>捕获到的 exception 对象，可继续 <code>Assert.Contains(...)</code></td></tr>
+</tbody>
+</table>
+
+<div class="key">
+异常层级：<code>Exception → SystemException → ArgumentException → ArgumentNullException / ArgumentOutOfRangeException</code>。<br>
+"参数不合法" 通用情形 → <code>ArgumentException</code>；具体 null → <code>ArgumentNullException</code>；超范围 → <code>ArgumentOutOfRangeException</code>。
+</div>
+
+<h2>6. [MemberData] —— 数据源外置</h2>
+<pre><code>[Theory]
+[MemberData(nameof(ThresholdTestData))]    // ← nameof 引用，重构友好
+public void RecordReading_...(double celsius, bool shouldRaise) { ... }
+
+public static IEnumerable&lt;object[]&gt; ThresholdTestData =&gt;
+    new List&lt;object[]&gt;
+    {
+        new object[] { 200.0,  true  },
+        new object[] { 100.001, true },     // 浮点边界微高
+        new object[] { 100.0,  false },     // 边界
+        new object[] { 99.999, false },     // 浮点边界微低
+        new object[] { -40.0,  false },     // 负温度
+    };</code></pre>
+
+<h2>7. =&gt; 的双重身份 ⚠️</h2>
+<table>
+<thead><tr><th>位置</th><th>例子</th><th>身份</th></tr></thead>
+<tbody>
+<tr><td>值的位置</td><td><code>Func&lt;int,int&gt; f = x =&gt; x*2;</code></td><td>Lambda</td></tr>
+<tr><td>成员声明位置</td><td><code>public int X =&gt; 42;</code></td><td>表达式体成员（expression-bodied member）</td></tr>
+</tbody>
+</table>
+
+<div class="key">
+表达式体成员 = <code>{ return ...; }</code> 的简写，C# 6 引入。可用在属性 / 方法 / 索引器 / 构造函数 / 析构函数。
+</div>
+
+<h2>8. [MemberData] 三种成员形式</h2>
+<pre><code>// 形式 1：属性 + 表达式体（最常用 ⭐⭐⭐⭐⭐）
+public static IEnumerable&lt;object[]&gt; Data =&gt; new[] { ... };
+//                                       ↑↑ 每次访问 Data 都执行右边
+
+// 形式 2：字段 + 赋值（很少用）
+public static IEnumerable&lt;object[]&gt; Data = new[] { ... };
+//                                       ↑ 类加载时执行一次
+
+// 形式 3：方法 + 表达式体
+public static IEnumerable&lt;object[]&gt; Data() =&gt; new[] { ... };
+//                                        ↑↑↑ 多了一对括号 = 方法</code></pre>
+
+<div class="note">
+<strong>判断口诀</strong>：①有 <code>()</code> → 方法；②无 <code>()</code> 看符号：<code>=&gt;</code> → 属性，<code>=</code> → 字段。
+</div>
+
+<h2>9. xUnit1024 —— 测试方法不能重载</h2>
+<pre><code>// ❌ 编译错误：xUnit1024
+[Theory] void Add_Works(int a, int b) { ... }
+[Theory] void Add_Works(double a, double b) { ... }
+
+// ✅ 改名
+[Theory] void Add_Works_Int(int a, int b) { ... }
+[Theory] void Add_Works_Double(double a, double b) { ... }</code></pre>
+
+<div class="danger">
+这<strong>不是 C# 编译器</strong>报的错，是 <strong>xUnit 的 Roslyn 分析器</strong>。原因：CI 用<strong>方法名</strong>作测试唯一 ID，重名会撞车。产品代码可以重载，测试不行。
+</div>
+
+<h2>10. fail-fast + 调试心智模型</h2>
+<pre><code>[Fact] Test_Method:
+    Assert 1   ✅ PASS
+    Assert 2   ✅ PASS
+    Assert 3   ❌ FAIL  ← 抛 AssertException，整个方法在这里停
+    Assert 4   ⚫ 未执行
+    Assert 5   ⚫ 未执行</code></pre>
+
+<div class="key">
+测试只报<strong>症状</strong>（WHAT 值不对），不报<strong>病因</strong>（WHERE 哪行 bug）。Stack trace 指向 Assert 行，不指向产品代码 ——
+<strong>例外</strong>：产品代码<strong>抛异常</strong>时，stack trace 会直接刺穿到产品代码。
+</div>
+
+<h2>11. 反复踩的坑（今天新增）</h2>
+<ol>
+  <li><code>var x = null;</code> ❌ 编译不过 —— <code>null</code> 没类型，必须显式 <code>ThresholdExceededEventArgs? x = null;</code></li>
+  <li><strong>测试方法不能重载</strong>（xUnit1024）—— CI 用方法名作 ID，重名撞车。</li>
+  <li><code>Assert.Throws&lt;T&gt;</code> 是<strong>精确</strong>类型匹配，子类不算。要接受子类用 <code>Assert.ThrowsAny&lt;T&gt;</code>。</li>
+  <li><code>x == double.NaN</code> 永远 false（IEEE 754：<code>NaN != NaN</code>）。要用 <code>double.IsNaN(x)</code>。</li>
+  <li><code>=&gt;</code> 在 Lambda 和表达式体里是<strong>两个东西</strong>。看位置区分。</li>
+  <li><code>Assert.Equal(expected, actual)</code> 参数顺序铁律 —— 反了报错信息会误导。</li>
+  <li>本地变量 / 参数命名必须 <strong>camelCase</strong>（<code>celsius</code>），不能 <code>sensortemp</code>。</li>
+  <li><code>new object[] { ... }</code> 强制成 <code>object[]</code>；<code>new[] { 1, 2 }</code> 会推断成 <code>int[]</code>。<code>[MemberData]</code> 必须前者。</li>
+  <li><code>[MemberData]</code> 引用的成员必须 <strong><code>public static</code></strong>，私有或实例都不行。</li>
+  <li><strong>多目标 csproj 三件事都得改对</strong>：标签必须 <code>&lt;TargetFrameworks&gt;</code>（复数 <code>s</code>），分隔符必须分号 <code>;</code>（不是逗号），DLL 落到 <code>lib/&lt;TFM&gt;/</code> 里。错一个就 NETSDK1046。</li>
+  <li><strong><code>dotnet pack</code> 默认元数据是<em>垃圾</em></strong>：<code>&lt;authors&gt;</code> 自动取项目名，<code>&lt;description&gt;</code> 是字面字符串 "Package Description"。这是 feature 不是 bug —— 强迫你注意没填。</li>
+  <li><strong><code>&lt;Version&gt;</code> + <code>&lt;PackageReleaseNotes&gt;</code> + 注释是三方契约</strong>：版本号从 1.1.0 跳到 1.1.1 是 PATCH（纯修 bug），不再是 MINOR（加功能）。三处必须同步改。</li>
+</ol>
+
+<!-- ============================================================ -->
+<h2>12. 晚上加场 · DLL / API / SDK 速览</h2>
+
+<table>
+<thead><tr><th>术语</th><th>实质</th><th>例子（你自己的项目）</th></tr></thead>
+<tbody>
+<tr><td><strong>DLL</strong></td><td>IL 代码 + metadata + manifest；不能自己跑，要 host</td><td><code>TemperatureSensor.Core.dll</code></td></tr>
+<tr><td><strong>API</strong></td><td>DLL 的<strong>公开面</strong>（public / protected 成员）</td><td><code>RecordReading(double)</code>、<code>ThresholdExceeded</code> 事件</td></tr>
+<tr><td><strong>NuGet 包（.nupkg）</strong></td><td>就是 ZIP：<code>.nuspec</code> 清单 + <code>lib/&lt;TFM&gt;/</code> DLL</td><td><code>Learning.TemperatureSensor.Core.1.1.1.nupkg</code></td></tr>
+<tr><td><strong>SDK</strong></td><td>三义：①.NET SDK（toolchain）②服务 SDK（Azure/AWS 一族包）③厂商库</td><td>你用的 <code>dotnet</code> CLI 来自 .NET SDK</td></tr>
+</tbody>
+</table>
+
+<div class="key">
+<strong>Library vs Framework 看控制流</strong>：<br>
+库 = <em>你叫它</em>（YourCode → Library）<br>
+框架 = <em>它叫你</em>（Framework → YourCode，即"控制反转"）<br>
+xUnit 是<strong>框架</strong>，因为是它通过反射调用你的 <code>[Fact]</code> 方法。你自己的 <code>TemperatureSensor.Core.dll</code> 是<strong>库</strong>。
+</div>
+
+<h3>SemVer 三段位</h3>
+<table>
+<thead><tr><th>段位</th><th>变化</th><th>承诺</th></tr></thead>
+<tbody>
+<tr><td>1.0.0 → 1.0.1（<strong>PATCH</strong>）</td><td>纯 bug 修复</td><td>什么都没加，只修</td></tr>
+<tr><td>1.0.0 → 1.1.0（<strong>MINOR</strong>）</td><td>加了新 API，旧 API 不变</td><td>你不用动代码也能升</td></tr>
+<tr><td>1.0.0 → 2.0.0（<strong>MAJOR</strong>）</td><td>删 / 改名 / 改签名公开 API</td><td>消费者可能要改代码</td></tr>
+</tbody>
+</table>
+
+<!-- ============================================================ -->
+<h2>13. 晚上加场 · <code>dotnet pack</code> 三轮实战</h2>
+
+<pre><code># 在 TemperatureSensor.Core 目录下
+dotnet pack -c Release</code></pre>
+
+<table>
+<thead><tr><th>轮次</th><th>csproj 状态</th><th>产物</th><th>大小</th></tr></thead>
+<tbody>
+<tr><td>Pass 1</td><td>裸跑，无元数据</td><td><code>TemperatureSensor.Core.<strong>1.0.0</strong>.nupkg</code>（默认假装 1.0.0）</td><td>4,303 B</td></tr>
+<tr><td>Pass 2</td><td>加 PackageId/Version/Authors/Desc/License/Tags/Notes</td><td><code>Learning.TemperatureSensor.Core.<strong>1.1.0</strong>.nupkg</code></td><td>5,073 B</td></tr>
+<tr><td>Pass 3</td><td>改 <code>&lt;TargetFrameworks&gt;net10.0;net8.0&lt;/&gt;</code></td><td><code>Learning.TemperatureSensor.Core.<strong>1.1.1</strong>.nupkg</code>（内含 2 个 DLL）</td><td>~7,500 B</td></tr>
+</tbody>
+</table>
+
+<div class="danger">
+<strong>多目标三大坑（NETSDK1046）</strong>：
+<pre><code>❌ &lt;TargetFramework&gt;net10.0,net8.0&lt;/TargetFramework&gt;     // 逗号、单数
+❌ &lt;TargetFramework&gt;net10.0;net8.0&lt;/TargetFramework&gt;     // 分号对了，但还是单数
+✅ &lt;TargetFrameworks&gt;net10.0;net8.0&lt;/TargetFrameworks&gt;   // 复数 s + 分号</code></pre>
+报错信息会直接告诉你："use the 'TargetFrameworks' property instead" —— <strong>读 SDK 报错信息，往往就是答案</strong>。
+</div>
+
+<h3>.nupkg 解剖（其实就是 ZIP）</h3>
+<pre><code>Learning.TemperatureSensor.Core.1.1.1.nupkg
+├── [Content_Types].xml                       ← OPC ZIP 标准（忽略）
+├── _rels/.rels                               ← OPC ZIP 标准（忽略）
+├── package/services/.../*.psmdcp             ← OPC ZIP 标准（忽略）
+├── Learning.TemperatureSensor.Core.nuspec    ← <strong>清单</strong>（id/version/authors/desc/...）
+└── lib/
+    ├── net8.0/TemperatureSensor.Core.dll     ← .NET 8 消费者拿这个
+    └── net10.0/TemperatureSensor.Core.dll    ← .NET 10 消费者拿这个</code></pre>
+
+<div class="key"><code>.nuspec</code> 4 个<strong>必填</strong>字段：<code>id</code>、<code>version</code>、<code>authors</code>、<code>description</code>。<code>dependencies</code> 是可选的（默认空）。<code>dotnet pack</code> 不给值会自动填占位字符串，给你"我忘记填了"的提示。</div>
+
+<!-- ============================================================ -->
+<h2>14. 晚上加场 · IL 预览（已 defer）</h2>
+
+<div class="note">今天用 <code>ilspycmd</code> 看了一眼 IL，<strong>主动 defer 到以后</strong>。学语言不必先懂 IL，但下面这两条"实质"值得记。</div>
+
+<h3>自动属性 = 一个隐藏字段 + 一个方法</h3>
+<pre><code>public double Reading { get; }   // C# 里看到的
+
+// IL 里实际是：
+private readonly double &lt;Reading&gt;k__BackingField;   // 字段（&lt;&gt; 在 C# 里非法，编译器专用）
+public double get_Reading() {                        // 方法（3 条 IL：ldarg.0; ldfld; ret）
+    return &lt;Reading&gt;k__BackingField;
+}</code></pre>
+
+<h3>事件 = 一个委托字段 + 两个方法（含 CAS 锁循环）</h3>
+<pre><code>public event EventHandler&lt;T&gt;? Foo;   // C# 里看到的（一行）
+
+// IL 里实际是：
+private EventHandler&lt;T&gt; Foo;                     // 委托链字段
+public void add_Foo(EventHandler&lt;T&gt; value) {     // += 调用的方法
+    // ~30 行 CAS 循环：Interlocked.CompareExchange + Delegate.Combine
+    // 保证多线程并发订阅时不丢 handler
+}
+public void remove_Foo(EventHandler&lt;T&gt; value) {  // -= 调用的方法
+    // 同样的 CAS 循环，但用 Delegate.Remove
+}</code></pre>
+
+<div class="key">
+<strong>一个 <code>public event Foo;</code> 一行代码，编译器给你生成 ~30 行线程安全 CAS 循环</strong>。这就是为什么 C# 让你写 <code>+=</code> 而不是手动维护委托链。
+</div>
+
+<h3>C# 表象 → IL 实质（速查）</h3>
+<table>
+<thead><tr><th>C# 写法</th><th>IL 实质</th></tr></thead>
+<tbody>
+<tr><td><code>public T X { get; }</code></td><td>backing field + <code>get_X()</code> + <code>.property</code> metadata</td></tr>
+<tr><td><code>public event T Foo;</code></td><td>backing field + <code>add_Foo</code>(CAS) + <code>remove_Foo</code>(CAS) + <code>.event</code> metadata</td></tr>
+<tr><td><code>lambda</code></td><td>编译器生成的匿名类 + <code>Invoke</code> 方法（闭包变量是该类的字段）</td></tr>
+<tr><td><code>async/await</code></td><td>状态机类 + <code>MoveNext()</code>（之后讲）</td></tr>
+<tr><td><code>using x = ...;</code></td><td><code>try { ... } finally { x.Dispose(); }</code></td></tr>
+<tr><td><code>foreach (var x in xs)</code></td><td><code>GetEnumerator() / MoveNext() / Current</code> + try/finally</td></tr>
+<tr><td><code>?.</code></td><td>null 检查 + 分支</td></tr>
+<tr><td><code>nameof(x)</code></td><td>编译期字符串字面量，运行时零成本</td></tr>
+</tbody>
+</table>
+
+<!-- ============================================================ -->
+<h2>15. 明天起 · committed 3-session 弧</h2>
+
+<div class="ok-box">
+目标：<strong>0→1 production C# software</strong> —— 一个可部署、有测试、有日志、有打包的 mini 服务。
+</div>
+
+<table>
+<thead><tr><th>Session</th><th>主题</th><th>核心问题</th></tr></thead>
+<tbody>
+<tr><td><strong>N+1</strong></td><td><code>ILogger</code> + DI + service lifetimes</td><td>"<code>Core</code> 不能 <code>Console.WriteLine</code>，那它怎么记日志？"<br>→ 答：注入 <code>ILogger&lt;T&gt;</code></td></tr>
+<tr><td><strong>N+2</strong></td><td>Minimal REST API 托管 Core</td><td>POST 一个 reading，返回 JSON，触发事件 → 写日志</td></tr>
+<tr><td><strong>N+3</strong></td><td>集成测试 + Docker</td><td><code>WebApplicationFactory&lt;T&gt;</code> + 多阶段 Dockerfile</td></tr>
+</tbody>
+</table>
+
+<!-- ============================================================ -->
+<h2>16. 明天自测（精选 7 题）</h2>
+<ol>
+  <li><code>[Fact]</code> 和 <code>[Theory]</code> 区别？什么时候用哪个？</li>
+  <li><code>Assert.Throws&lt;T&gt;</code> 和 <code>Assert.ThrowsAny&lt;T&gt;</code> 区别？给一个 <code>ArgumentNullException</code> 例子。</li>
+  <li><code>=&gt;</code> 出现在 <code>Func&lt;int,int&gt; f = x =&gt; x*2;</code> 和 <code>public int X =&gt; 42;</code> 里分别是什么？怎么区分？</li>
+  <li><code>[MemberData]</code> 三种成员形式：属性 <code>=&gt;</code>、字段 <code>=</code>、方法 <code>() =&gt;</code>，执行时机分别是？</li>
+  <li>测试方法重载在 C# 语法层合法，xUnit 为什么禁止？规则号是什么？</li>
+  <li>给一个 <code>.csproj</code>：把它从只支持 net10.0 改成同时支持 net8.0 和 net10.0。三件事都要做对。</li>
+  <li>SemVer：你的库现在是 1.1.0，做了下面三种修改各自该升到哪个版本？<br>
+    a) 在 <code>RecordReading</code> 里修一个浮点比较的 bug（行为没变）<br>
+    b) 加一个新的重载 <code>RecordReading(string sensorId, double celsius)</code><br>
+    c) 把 <code>RecordReading(double)</code> 改名成 <code>Record(double)</code>
+  </li>
+</ol>
+
+<div class="note">
+完整 83 题在 <a href="../2026-05-20/Unit-Testing-Fundamentals-Summary.md">Unit-Testing-Fundamentals-Summary.md</a>，按 A-M 13 个类别组织。
+</div>
+
+</body>
+</html>

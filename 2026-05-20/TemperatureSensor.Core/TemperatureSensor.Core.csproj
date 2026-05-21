@@ -1,0 +1,40 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net10.0;net8.0</TargetFrameworks>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <!-- ====================================================================
+       NuGet package metadata.
+       Every consumer who installs this package will see these values
+       in their IDE, in nuget.org search results, and in their bill of
+       materials. Treat them like a public API — they're hard to change.
+       ==================================================================== -->
+  <PropertyGroup>
+    <!-- Identity: the package's unique name on nuget.org. -->
+    <PackageId>Learning.TemperatureSensor.Core</PackageId>
+
+    <!-- SemVer: bumped to 1.1.0 because we ADDED NaN/Infinity validation
+         since 1.0.0. Backward-compatible feature → MINOR bump. -->
+    <Version>1.1.1</Version>
+
+    <!-- Authoring metadata. -->
+    <Authors>Marlon Jin</Authors>
+    <Company>C# Learning Lab</Company>
+    <Description>A tiny sensor library that raises an event when a temperature reading exceeds a configured threshold. Built as a teaching artifact for unit testing with xUnit.Net8.0 + Net10.0 (recommended — LTS + current)</Description>
+    <PackageTags>sensor;temperature;events;learning;xunit</PackageTags>
+
+    <!-- License: SPDX identifier. MIT = "do what you want, just keep the copyright". -->
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+
+    <!-- Release notes for THIS version specifically. -->
+    <PackageReleaseNotes>1.1.0: Added NaN and Infinity validation to RecordReading (throws ArgumentException).</PackageReleaseNotes>
+
+    <!-- Reproducibility: embed the source URL so debuggers can fetch it. -->
+    <RepositoryUrl>https://example.invalid/learning/temperature-sensor</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+  </PropertyGroup>
+
+</Project>

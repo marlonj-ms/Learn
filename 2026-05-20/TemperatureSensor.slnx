@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="TemperatureSensor.Core/TemperatureSensor.Core.csproj" />
+  <Project Path="TemperatureSensor.Tests/TemperatureSensor.Tests.csproj" />
+</Solution>
