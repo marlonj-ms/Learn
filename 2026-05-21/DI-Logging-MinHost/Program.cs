@@ -2,6 +2,9 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
+
+
+
 // 1. Build the registration list.
 var services = new ServiceCollection();
 
@@ -14,16 +17,31 @@ services.AddLogging(builder =>
 
 // 3. Register our own business service.
 services.AddTransient<TemperatureSensorService>();
+services.AddTransient<OrderService>();
+//services.AddTransient<IInventory,RealInventory>();
+services.AddTransient<IInventory,FakeInventory>();
+
 
 // 4. Build the DI container.
 using var provider = services.BuildServiceProvider();
 
 // 5. Resolve the service from the container.
-var sensor = provider.GetRequiredService<TemperatureSensorService>();
+//var sensor = provider.GetRequiredService<TemperatureSensorService>();
 
 // 6. Call business methods.
-sensor.Record(72.5);
-sensor.Record(101.3);
+//sensor.Record(72.5);
+//sensor.Record(101.3);
+
+Console.WriteLine("----- TRACE: Resolve OrderService #1 -----");
+var order1 = provider.GetRequiredService<OrderService>();
+order1.PlaceOrder("Car",100);
+order1.PlaceOrder("Pen", 5); 
+
+Console.WriteLine("----- TRACE: Resolve OrderService #2 -----");
+var order2 = provider.GetRequiredService<OrderService>();
+order2.PlaceOrder("Notebook",500);
+
+Console.WriteLine($"ReferenceEquals(order1, order2) = {ReferenceEquals(order1, order2)}");
 
 // =====================================================================
 // 学习笔记（learning notes）—— 保留为注释，不参与编译

@@ -9,3 +9,7 @@ obj/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Nested repos (cloned for reference / future learning, not part of this repo)
+orcasql-mysqlflex/
+
