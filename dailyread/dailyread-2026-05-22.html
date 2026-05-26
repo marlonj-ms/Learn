@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>2026-05-22 · DI + Lambda 复盘日</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; max-width: 860px; margin: 40px auto; padding: 0 24px 80px; line-height: 1.75; color: #1f2328; background: #fbfbfb; }
+  h1 { border-bottom: 3px solid #1a7f37; padding-bottom: 8px; color: #1a7f37; }
+  h2 { border-left: 4px solid #1a7f37; padding-left: 10px; margin-top: 34px; color: #1f2328; font-size: 1.3em; }
+  h3 { color: #1a7f37; margin-top: 22px; font-size: 1.08em; }
+  code { background: #eef2f6; padding: 2px 6px; border-radius: 4px; font-family: "Consolas", monospace; font-size: 0.94em; color: #cf222e; }
+  pre { background: #1f2328; color: #e6edf3; padding: 12px 16px; border-radius: 8px; overflow-x: auto; font-size: 0.86em; }
+  pre code { background: none; color: inherit; padding: 0; }
+  .key { background: #ddf4ff; border-left: 4px solid #0969da; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .note { background: #fff8c5; border-left: 4px solid #d4a72c; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .danger { background: #ffebe9; border-left: 4px solid #cf222e; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .ok-box { background: #dafbe1; border-left: 4px solid #1a7f37; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  a { color: #0969da; text-decoration: none; } a:hover { text-decoration: underline; }
+  .back { font-size: 0.9em; color: #57606a; margin-bottom: 16px; }
+  .meta { color: #57606a; font-size: 0.9em; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; }
+  th, td { border: 1px solid #d0d7de; padding: 6px 10px; text-align: left; vertical-align: top; }
+  th { background: #f6f8fa; }
+</style>
+</head>
+<body>
+
+<div class="back"><a href="../dailyread.html">返回首页</a></div>
+
+<h1>DI + Lambda 复盘日（无新代码）</h1>
+<p class="meta">2026-05-22 · 5 分钟复习 · 配套：<a href="../2026-05-22/DI-Lambda-Flow-Summary.md">完整 Summary</a></p>
+
+<div class="ok-box">
+<strong>今天主线：</strong>不写新代码，纯口头复盘前一天的 DI + Lambda 心智模型。把"<strong>注册 ≠ 构造</strong>"和"<strong>生命周期 ≠ 调用次数</strong>"两条铁律说到嘴里能脱口而出。
+</div>
+
+<h2>1. 业务数据 vs 依赖项 —— 放哪里</h2>
+<table>
+<thead><tr><th>角色</th><th>放哪里</th><th>例子</th></tr></thead>
+<tbody>
+<tr><td><strong>业务数据（business data）</strong></td><td>方法参数</td><td><code>double celsius</code></td></tr>
+<tr><td><strong>依赖项（dependency）</strong></td><td>构造函数参数 → 私有只读字段</td><td><code>ILogger&lt;T&gt;</code> / <code>IInventory</code></td></tr>
+</tbody>
+</table>
+
+<div class="key">
+DI 不是"类不声明依赖"，而是 <strong>类清晰声明依赖，但不创建具体依赖</strong>。构造函数说"我需要什么"，容器说"我给你"。
+</div>
+
+<h2>2. 三个生命周期的精确表述</h2>
+<table>
+<thead><tr><th>Lifetime</th><th>规则</th><th>同一 scope 内两次 resolve</th><th>跨 scope</th></tr></thead>
+<tbody>
+<tr><td><code>Transient</code></td><td>每次 resolve 都 new</td><td>不同对象</td><td>不同对象</td></tr>
+<tr><td><code>Singleton</code></td><td>整个 provider 一个</td><td>同一对象</td><td>同一对象</td></tr>
+<tr><td><code>Scoped</code></td><td>同一 scope 一个</td><td>同一对象</td><td>不同对象</td></tr>
+</tbody>
+</table>
+
+<div class="danger">
+<strong>易混点：</strong>Lifetime <strong>决定的是复用策略</strong>（reuse policy），<strong>不是调用次数</strong>。<br>
+"Transient 下 <code>order1</code> ≠ <code>order2</code>"是因为我们 <strong>resolve 了两次</strong>，不是因为方法被调了两次。
+</div>
+
+<h2>3. DI 端到端流程图（背下来）</h2>
+<pre><code>ServiceCollection (rules only — 注册清单)
+  -&gt; AddLogging / AddTransient / AddScoped / AddSingleton
+  -&gt; BuildServiceProvider()
+  -&gt; GetRequiredService&lt;T&gt;()
+       -&gt; 递归解析构造函数参数
+       -&gt; 自底向上 new 对象图
+  -&gt; 返回根服务</code></pre>
+
+<h2>4. 接口映射 —— DI 的桥</h2>
+<pre><code>// OrderService 依赖抽象 IInventory，不直接 new FakeInventory
+public sealed class OrderService(ILogger&lt;OrderService&gt; logger, IInventory inventory)
+{
+    // ...
+}
+
+// 注册时必须给抽象映射到具体
+services.AddTransient&lt;OrderService&gt;();
+services.AddTransient&lt;IInventory, FakeInventory&gt;();   // ← 没这行 resolve 时炸</code></pre>
+
+<div class="key">
+没注册映射 → 容器看到 <code>IInventory</code> 不知道 new 谁 → 运行时 <code>InvalidOperationException: Unable to resolve service for type 'IInventory'</code>。<strong>编译过，运行炸</strong>，这是 DI 最常见的坑。
+</div>
+
+<h2>5. Lambda 三件套复习</h2>
+<table>
+<thead><tr><th>形式</th><th>例子</th></tr></thead>
+<tbody>
+<tr><td>表达式 lambda（expression lambda）</td><td><code>x =&gt; x * 2</code></td></tr>
+<tr><td>语句 lambda（statement lambda）</td><td><code>x =&gt; { Console.WriteLine(x); return x * 2; }</code></td></tr>
+<tr><td>0 参数</td><td><code>() =&gt; "hi"</code>（括号必填）</td></tr>
+<tr><td>1 参数</td><td><code>x =&gt; x * 2</code>（括号可选）</td></tr>
+<tr><td>多参数</td><td><code>(a, b) =&gt; a + b</code>（括号必填）</td></tr>
+</tbody>
+</table>
+
+<h3>委托变量 vs 调用结果</h3>
+<pre><code>Func&lt;int&gt; clock = () =&gt; DateTime.Now.Second;
+clock      // ← 委托变量本身（一个值）
+clock()    // ← 调用它，得到 int 结果</code></pre>
+
+<h2>6. LINQ 延迟执行 —— ToList 是 trigger</h2>
+<pre><code>var query = numbers.Where(n =&gt; n &gt; 5);    // ❌ 还没跑！只构建了表达式
+var list  = query.ToList();               // ✅ 这一刻才执行
+foreach (var x in query) { ... }          // ✅ 这一刻也会执行</code></pre>
+
+<div class="key">
+没 <code>ToList()</code> 时，每次 <code>foreach</code> 都会<strong>重新执行</strong>整个 LINQ 链。如果源是数据库或大集合，这是性能杀手。
+</div>
+
+<h2>7. <code>new()</code> target-typed 语法</h2>
+<pre><code>// 老写法
+public List&lt;string&gt; Items { get; } = new List&lt;string&gt;();
+
+// C# 9+ target-typed new
+public List&lt;string&gt; Items { get; } = new();   // ← 类型从左侧推断</code></pre>
+
+<div class="note">
+<strong>注意：</strong>这不是 setter 赋值！<code>get;</code>-only 属性也能用 <code>= new()</code> 初始化，因为它初始化的是<strong>底层字段</strong>（backing field），发生在构造期。
+</div>
+
+<h2>8. 今天背下来的三句话</h2>
+<div class="ok-box">
+1. <strong>"Registering is not constructing; resolving is constructing."</strong><br>
+2. <strong>"Lifetime controls reuse policy, not call count."</strong><br>
+3. <strong>"Interface mapping is the bridge between abstraction and concrete implementation."</strong>
+</div>
+
+<h2>🎯 一句话总结</h2>
+<div class="key">
+今天不写代码，把脑里的 DI 心智模型擦干净。<strong>注册阶段只是"写规则"，没有任何构造函数会跑；解析阶段才真正 new 对象</strong>。Lifetime 选哪个，看的是"这个对象什么时候该被复用"，不是"它会被调用几次"。
+</div>
+
+<p class="meta" style="margin-top: 40px; border-top: 1px solid #d0d7de; padding-top: 16px;">
+— 复盘日，没有代码也没问题。让心智模型先沉淀。 —
+</p>
+
+</body>
+</html>

@@ -1089,6 +1089,121 @@ bool eventFired = false;                        // ✅</code></pre>
 SemVer：<strong>PATCH</strong>（修 bug）/ <strong>MINOR</strong>（加功能 backward-compatible）/ <strong>MAJOR</strong>（破坏性改动）。三处要同步改，否则将来翻 git log 一脸懵。
 </div>
 
+<div class="danger">
+<strong>21. DI 注册了不映射 → 编译过，运行炸</strong>
+<pre><code>services.AddTransient&lt;OrderService&gt;();          // ✅ 注册了 OrderService
+// ❌ 没注册 IInventory → FakeInventory 的映射
+
+provider.GetRequiredService&lt;OrderService&gt;();   // 💥 InvalidOperationException:
+                                                //    Unable to resolve service for type 'IInventory'
+// ✅ 补上接口映射
+services.AddTransient&lt;IInventory, FakeInventory&gt;();</code></pre>
+<strong>锚句：</strong>"Registration ≠ construction"。容器只在 resolve 时才发现缺失依赖。<strong>Lifetime 控制的是复用策略，不是调用次数。</strong>
+</div>
+
+<div class="danger">
+<strong>22. Scoped 注入 Singleton — 隐形数据陈旧</strong>
+<pre><code>services.AddSingleton&lt;CacheService&gt;();
+services.AddScoped&lt;DbContext&gt;();
+// CacheService 构造期注入 DbContext → 永远持有第一次 scope 的对象
+// → 数据陈旧 / 内存泄漏</code></pre>
+ASP.NET Core 在 Development 环境自动开 <code>ValidateScopes = true</code> 会在启动期抓出这种错。<strong>scope ≈ 一个 HTTP request</strong>。
+</div>
+
+<div class="danger">
+<strong>23. <code>appsettings.json</code> 层级分隔符是 <code>:</code>，环境变量用 <code>__</code></strong>
+<pre><code>// appsettings.json
+{ "Sensor": { "Threshold": 30.0 } }
+
+builder.Configuration.GetValue&lt;double&gt;("Sensor:Threshold");   // ✅ 冒号 是层级分隔
+builder.Configuration.GetValue&lt;double&gt;("Sensor.Threshold");   // ❌ 点不是层级分隔
+
+// 环境变量（cmd/PowerShell 不允许 :，必须双下划线）
+$env:Sensor__Threshold = "50"                                 // ✅ 双下划线 = :</code></pre>
+配置提供者链 <strong>later wins</strong>：appsettings.json → appsettings.{Env}.json → 环境变量 → CLI 参数。
+</div>
+
+<div class="danger">
+<strong>24. Minimal API：路由 handler 内部 <code>+=</code> 订阅事件 = 内存泄漏</strong>
+<pre><code>// ❌ 每次请求都新增一个 handler，多播委托不去重
+app.MapPost("/readings", (Sensor sensor, ILogger&lt;Program&gt; logger, ReadingDto dto) =&gt;
+{
+    sensor.ThresholdExceeded += (s, e) =&gt; logger.LogWarning(...);
+    sensor.RecordReading(dto.Celsius);
+    return Results.Ok();
+});
+
+// ✅ 在组合根（composition root）订阅一次，启动期就位
+var sensor = app.Services.GetRequiredService&lt;Sensor&gt;();
+sensor.ThresholdExceeded += (s, e) =&gt; startupLogger.LogWarning(...);
+app.Run();</code></pre>
+4 次超温请求 = 1+2+3+4 = <strong>10 条 warn</strong>，handler 永不释放。多播委托按引用比较，<strong>即使 lambda 长得一样也不去重</strong>。
+</div>
+
+<div class="danger">
+<strong>25. <code>Program.cs</code> 顶级语句 → 测试看不见 <code>Program</code> 类</strong>
+<pre><code>// Program.cs 末尾少了这行
+public partial class Program { }   // ← 没它，下面这行编译都过不去
+// ↓ 测试项目
+public class Tests : IClassFixture&lt;WebApplicationFactory&lt;Program&gt;&gt; { }
+//                                                  ^^^^^^^ CS0122: inaccessible</code></pre>
+顶级语句默认把 <code>Program</code> 做成 <strong>internal</strong>。微软官方推荐用 <code>public partial class Program { }</code> 开"测试小窗户"。
+</div>
+
+<div class="danger">
+<strong>26. 测错误路径不能用 <code>EnsureSuccessStatusCode()</code></strong>
+<pre><code>// ❌ 反路径用 EnsureSuccessStatusCode：400 会 throw，让"我期望 400"的测试假失败
+response.EnsureSuccessStatusCode();
+Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);   // 永远走不到这
+
+// ✅ 测错误路径永远直接断言 StatusCode
+Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);</code></pre>
+正路径用 <code>EnsureSuccessStatusCode()</code> 没问题；<strong>反路径必须直接断言 StatusCode</strong>。
+</div>
+
+<div class="danger">
+<strong>27. Dockerfile 必须放在它要 COPY 的所有项目的共同父目录</strong>
+<pre><code>// ❌ Dockerfile 放在子项目里 → 看不见兄弟项目
+2026-05-25/
+├── TemperatureSensor.Api/
+│   └── Dockerfile              ← COPY ../TemperatureSensor.Core/ 失败
+└── TemperatureSensor.Core/
+
+// ✅ Dockerfile 放在共同父目录（common ancestor）
+2026-05-25/
+├── Dockerfile                  ← 这一层
+├── TemperatureSensor.Api/
+└── TemperatureSensor.Core/</code></pre>
+<code>docker build .</code> 的 <code>.</code> 是 build context 根；<code>COPY</code> 路径相对它。<strong>锚句：Dockerfile 必须看得见所有它要 COPY 的项目。</strong>
+</div>
+
+<div class="danger">
+<strong>28. Docker 多阶段：ENV / WORKDIR / 安装的包都不跨 stage，只有 <code>COPY --from</code> 是桥</strong>
+<pre><code>FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
+WORKDIR /src
+RUN apt-get install -y vim          # ❌ Stage 2 没有 vim
+ENV BUILD_TIME=2026-05-26           # ❌ Stage 2 拿不到这个变量
+
+FROM mcr.microsoft.com/dotnet/aspnet:9.0
+WORKDIR /app
+COPY --from=build /app/publish .    # ✅ 这是唯一的桥
+ENV ASPNETCORE_URLS=http://+:8080   # Stage 2 自己重新设</code></pre>
+<strong>"FROM 是 stage 分界线"</strong>：每个 FROM 启动一个新的临时容器。<strong>"Stage 2 没编译器"</strong> — 想跑 <code>dotnet build</code> 都没工具。
+</div>
+
+<div class="danger">
+<strong>29. PowerShell 的 <code>curl</code> 是别名陷阱，必须用 <code>curl.exe</code></strong>
+<pre><code>// ❌ PowerShell 把 curl alias 到 Invoke-WebRequest，-X/-d 都不认
+curl -X POST http://localhost:8080/readings -d '{"celsius":25}'
+// → Invoke-WebRequest : A parameter cannot be found that matches parameter name 'X'
+
+// ✅ 显式调 Windows 自带的 curl.exe（Win10+ 自带）
+curl.exe -i -X POST http://localhost:8080/readings `
+  -H "Content-Type: application/json" `
+  -d "{\"celsius\":25}"                          # ← JSON 内引号双重转义</code></pre>
+PowerShell 单引号字符串不会展开转义，JSON body 给 <code>curl.exe</code> 要写成 <code>"{\"celsius\":25}"</code>。
+</div>
+
 <a class="back-top" href="#">↑ 回到顶部</a>
 
 <!-- ============================================================ -->

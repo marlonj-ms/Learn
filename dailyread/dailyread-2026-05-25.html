@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>2026-05-25 · Minimal Web API + IOptions 配置</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; max-width: 860px; margin: 40px auto; padding: 0 24px 80px; line-height: 1.75; color: #1f2328; background: #fbfbfb; }
+  h1 { border-bottom: 3px solid #1a7f37; padding-bottom: 8px; color: #1a7f37; }
+  h2 { border-left: 4px solid #1a7f37; padding-left: 10px; margin-top: 34px; color: #1f2328; font-size: 1.3em; }
+  h3 { color: #1a7f37; margin-top: 22px; font-size: 1.08em; }
+  code { background: #eef2f6; padding: 2px 6px; border-radius: 4px; font-family: "Consolas", monospace; font-size: 0.94em; color: #cf222e; }
+  pre { background: #1f2328; color: #e6edf3; padding: 12px 16px; border-radius: 8px; overflow-x: auto; font-size: 0.86em; }
+  pre code { background: none; color: inherit; padding: 0; }
+  .key { background: #ddf4ff; border-left: 4px solid #0969da; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .note { background: #fff8c5; border-left: 4px solid #d4a72c; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .danger { background: #ffebe9; border-left: 4px solid #cf222e; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .ok-box { background: #dafbe1; border-left: 4px solid #1a7f37; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  a { color: #0969da; text-decoration: none; } a:hover { text-decoration: underline; }
+  .back { font-size: 0.9em; color: #57606a; margin-bottom: 16px; }
+  .meta { color: #57606a; font-size: 0.9em; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; }
+  th, td { border: 1px solid #d0d7de; padding: 6px 10px; text-align: left; vertical-align: top; }
+  th { background: #f6f8fa; }
+</style>
+</head>
+<body>
+
+<div class="back"><a href="../dailyread.html">返回首页</a></div>
+
+<h1>Minimal Web API + IOptions 配置</h1>
+<p class="meta">2026-05-25 · 5 分钟复习 · 配套：<a href="../2026-05-25/Minimal-API-Summary.md">完整 Summary</a> · <a href="../2026-05-25/TemperatureSensor.Api/Program.cs">Program.cs</a></p>
+
+<div class="ok-box">
+<strong>今天主线：</strong>从零 scaffold 一个 ASP.NET Core minimal API，把昨天写的 <code>TemperatureSensor.Core</code> 库挂上 HTTP 入口。然后层层叠加 3 个生产模式：结构化日志、启动期事件订阅、外部化配置。<br>
+<strong>结果：</strong>3 个 curl 探针验证通过：<code>25°C → 200</code> / <code>NaN → 400</code> / <code>100°C → 200（带 warn 日志）</code>。
+</div>
+
+<h2>1. 7 步配方（locked-in）</h2>
+<pre><code>1. Scaffold     dotnet new web -n TemperatureSensor.Api --framework net9.0
+2. Wire deps    dotnet add reference ..\TemperatureSensor.Core\TemperatureSensor.Core.csproj
+3. Register     builder.Services.AddSingleton&lt;Sensor&gt;(sp =&gt; new Sensor(threshold));
+4. Build        var app = builder.Build();
+5. Configure    app.MapGet("/", () =&gt; "Hello"); app.MapPost("/readings", ...);
+6. Run          app.Run();
+7. Test         curl -i -X POST http://localhost:5000/readings -H "Content-Type: application/json" -d '{"celsius":25}'</code></pre>
+
+<div class="key">
+每一步停下来确认 → 再做下一步。<strong>"一步一确认"是新手在陌生生态里唯一能避免迷路的方法。</strong>
+</div>
+
+<h2>2. Minimal API 核心 4 个调用</h2>
+<table>
+<thead><tr><th>调用</th><th>作用</th></tr></thead>
+<tbody>
+<tr><td><code>app.MapGet(path, handler)</code></td><td>注册 GET 路由</td></tr>
+<tr><td><code>app.MapPost(path, handler)</code></td><td>注册 POST 路由</td></tr>
+<tr><td><code>Results.Ok(value)</code></td><td>返回 <code>200</code> + JSON body</td></tr>
+<tr><td><code>Results.BadRequest(value)</code></td><td>返回 <code>400</code> + JSON body</td></tr>
+</tbody>
+</table>
+
+<h3>路由 handler 的参数 = DI 注入点</h3>
+<pre><code>app.MapPost("/readings", (Sensor sensor, ILogger&lt;Program&gt; logger, ReadingDto dto) =&gt;
+{
+    if (double.IsNaN(dto.Celsius) || double.IsInfinity(dto.Celsius))
+        return Results.BadRequest(new { error = "invalid temperature" });
+
+    sensor.RecordReading(dto.Celsius);
+    logger.LogInformation("Recorded reading: {Celsius}°C", dto.Celsius);
+    return Results.Ok(new { recorded = dto.Celsius });
+});</code></pre>
+
+<div class="note">
+<strong>谁是 DI 注入，谁是 body 绑定？</strong>框架按类型推断：<br>
+• 已注册的服务（<code>Sensor</code> / <code>ILogger&lt;T&gt;</code>）→ 从容器取<br>
+• 复杂对象 + 来自 POST → 反序列化 JSON body（<code>ReadingDto dto</code>）
+</div>
+
+<h2>3. 结构化日志（Structured Logging）</h2>
+<pre><code>// ❌ 字符串拼接：日志只是文本，搜不出来
+logger.LogInformation("Recorded reading: " + dto.Celsius + "°C");
+
+// ✅ 命名占位符（named placeholder）：保留字段，能查询
+logger.LogInformation("Recorded reading: {Celsius}°C", dto.Celsius);</code></pre>
+
+<div class="key">
+<code>{Celsius}</code> 不是 <code>string.Format</code>！它在 App Insights / Seq / Datadog 里会以<strong>独立字段</strong>存在，可以 <code>WHERE Celsius &gt; 30</code> 直接查询。这是生产可观测性的基础。
+</div>
+
+<h2>4. 组合根（Composition Root）— 启动期订阅</h2>
+<pre><code>// ✅ 启动期订阅一次，长生命周期复用
+var sensor = app.Services.GetRequiredService&lt;Sensor&gt;();
+var startupLogger = app.Services.GetRequiredService&lt;ILogger&lt;Program&gt;&gt;();
+sensor.ThresholdExceeded += (s, e) =&gt;
+    startupLogger.LogWarning("Threshold exceeded: {Celsius}°C", e.Celsius);
+
+app.Run();</code></pre>
+
+<div class="danger">
+<strong>反模式（在路由 handler 内部 +=）：</strong>
+<pre><code>app.MapPost("/readings", (Sensor sensor, ILogger&lt;Program&gt; logger, ReadingDto dto) =&gt;
+{
+    sensor.ThresholdExceeded += (s, e) =&gt; logger.LogWarning(...);   // ❌ 每次请求都新订阅
+    sensor.RecordReading(dto.Celsius);
+    return Results.Ok();
+});</code></pre>
+<strong>每次请求都新增一个 handler</strong>，4 次超温请求 = 1 + 2 + 3 + 4 = 10 条 warn 日志 → 内存泄漏 + 日志噪声。<br>
+<strong>多播委托按引用比较</strong>，即使 lambda 长得一样也<strong>不去重</strong>。
+</div>
+
+<h2>5. 外部化配置：appsettings.json + IConfiguration</h2>
+<pre><code>// appsettings.json
+{
+  "Sensor": { "Threshold": 30.0 }
+}
+
+// Program.cs
+double threshold = builder.Configuration.GetValue&lt;double&gt;("Sensor:Threshold");</code></pre>
+
+<table>
+<thead><tr><th>key 写法</th><th>来源</th></tr></thead>
+<tbody>
+<tr><td><code>"Sensor:Threshold"</code></td><td>appsettings.json 层级（<code>:</code> 是<strong>层级分隔符</strong>）</td></tr>
+<tr><td><code>$env:Sensor__Threshold = "50"</code></td><td>环境变量（双下划线 <code>__</code> 等价 <code>:</code>）</td></tr>
+</tbody>
+</table>
+
+<h3>配置提供者链（later wins）</h3>
+<pre><code>appsettings.json
+  -&gt; appsettings.{Environment}.json   (开发环境覆盖生产)
+  -&gt; 环境变量
+  -&gt; 命令行参数                          ← 优先级最高</code></pre>
+
+<div class="ok-box">
+<strong>实测：</strong>设 <code>$env:Sensor__Threshold = "50"</code> 重启 → 启动日志显示 <code>loaded from config: 50°C</code> → POST 35°C 不报警（35 &lt; 50）。<strong>同一份二进制，不同的阈值，不需要重新编译。</strong>这就是生产部署的玩法。
+</div>
+
+<h2>6. ILogger&lt;T&gt; 是怎么注入的（开放泛型）</h2>
+<div class="key">
+框架注册的是<strong>开放泛型（open generic）</strong>：<code>ServiceDescriptor.Singleton(typeof(ILogger&lt;&gt;), typeof(Logger&lt;&gt;))</code>。<br>
+你 resolve 任何 <code>ILogger&lt;Foo&gt;</code>，容器在<strong>解析时</strong>把 <code>&lt;&gt;</code> 闭合成 <code>&lt;Foo&gt;</code>。一次注册，无限种 <code>T</code>。
+</div>
+
+<h2>7. 今天背下来的三句话</h2>
+<div class="ok-box">
+1. <strong>"路由 handler 的参数 = DI 注入点 + body 绑定点。框架按类型分。"</strong><br>
+2. <strong>"启动期订阅一次，长寿命；请求里订阅每次叠加，泄漏。"</strong><br>
+3. <strong>"配置链：appsettings → env-specific → env vars → CLI。Later wins。"</strong>
+</div>
+
+<h2>🎯 一句话总结</h2>
+<div class="key">
+从零造出一个真 HTTP API，挂上结构化日志、组合根订阅、外部化配置。生产代码三件套就位。<strong>明天上集成测试 + Docker，Session N+3 收官。</strong>
+</div>
+
+<p class="meta" style="margin-top: 40px; border-top: 1px solid #d0d7de; padding-top: 16px;">
+— 一步一确认的 7 步配方真的好用。 —
+</p>
+
+</body>
+</html>

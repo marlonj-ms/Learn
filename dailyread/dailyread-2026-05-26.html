@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>2026-05-26 · Integration Tests + Docker 多阶段构建</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; max-width: 860px; margin: 40px auto; padding: 0 24px 80px; line-height: 1.75; color: #1f2328; background: #fbfbfb; }
+  h1 { border-bottom: 3px solid #1a7f37; padding-bottom: 8px; color: #1a7f37; }
+  h2 { border-left: 4px solid #1a7f37; padding-left: 10px; margin-top: 34px; color: #1f2328; font-size: 1.3em; }
+  h3 { color: #1a7f37; margin-top: 22px; font-size: 1.08em; }
+  code { background: #eef2f6; padding: 2px 6px; border-radius: 4px; font-family: "Consolas", monospace; font-size: 0.94em; color: #cf222e; }
+  pre { background: #1f2328; color: #e6edf3; padding: 12px 16px; border-radius: 8px; overflow-x: auto; font-size: 0.86em; }
+  pre code { background: none; color: inherit; padding: 0; }
+  .key { background: #ddf4ff; border-left: 4px solid #0969da; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .note { background: #fff8c5; border-left: 4px solid #d4a72c; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .danger { background: #ffebe9; border-left: 4px solid #cf222e; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .ok-box { background: #dafbe1; border-left: 4px solid #1a7f37; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  a { color: #0969da; text-decoration: none; } a:hover { text-decoration: underline; }
+  .back { font-size: 0.9em; color: #57606a; margin-bottom: 16px; }
+  .meta { color: #57606a; font-size: 0.9em; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; }
+  th, td { border: 1px solid #d0d7de; padding: 6px 10px; text-align: left; vertical-align: top; }
+  th { background: #f6f8fa; }
+</style>
+</head>
+<body>
+
+<div class="back"><a href="../dailyread.html">返回首页</a></div>
+
+<h1>Integration Tests + Docker 多阶段构建</h1>
+<p class="meta">2026-05-26 · 5 分钟复习 · 配套：<a href="../2026-05-26/Integration-Tests-and-Docker-Summary.md">完整 Summary</a> · <a href="../2026-05-26/TemperatureSensor.Api.Tests">集成测试项目</a> · <a href="../2026-05-25/Dockerfile">Dockerfile</a></p>
+
+<div class="ok-box">
+<strong>今天主线：</strong>Session N+3 收官。同一份代码现在能 <strong>① 跑单元测试 ② 跑集成测试 ③ 跑在 Docker 容器里被外部 curl 命中</strong>。<br>
+<strong>结果：</strong>3/3 集成测试绿 ✅ · Docker 镜像 <code>temperature-sensor:dev</code>（92.9 MB / 329 MB on disk）跑起来 ✅ · 0→1 生产软件目标达成 🎯
+</div>
+
+<h2>Part A · 集成测试（Integration Tests）</h2>
+
+<h3>1. Unit test vs Integration test 的真正边界</h3>
+<table>
+<thead><tr><th>维度</th><th>Unit Test</th><th>Integration Test</th></tr></thead>
+<tbody>
+<tr><td>目标</td><td>一个 class / 一个方法</td><td>多个组件协作（routing + DI + JSON + 业务）</td></tr>
+<tr><td>依赖</td><td>都 mock 掉</td><td>真实组件协作</td></tr>
+<tr><td>入口</td><td>直接调方法</td><td>走 HTTP（<code>HttpClient</code>）</td></tr>
+<tr><td>速度</td><td>极快（毫秒）</td><td>较慢（需要启动 host）</td></tr>
+</tbody>
+</table>
+
+<div class="key">
+<strong>锚句：</strong>单元测试是<strong>显微镜</strong>，集成测试是<strong>风洞</strong>。两个都要有。
+</div>
+
+<h3>2. WebApplicationFactory&lt;Program&gt; — 内存里启动整个 API</h3>
+<pre><code>public class TemperatureSensorAPITests : IClassFixture&lt;WebApplicationFactory&lt;Program&gt;&gt;
+{
+    private readonly HttpClient _client;
+
+    public TemperatureSensorAPITests(WebApplicationFactory&lt;Program&gt; factory)
+    {
+        _client = factory.CreateClient();
+    }
+}</code></pre>
+
+<table>
+<thead><tr><th>组件</th><th>作用</th></tr></thead>
+<tbody>
+<tr><td><code>WebApplicationFactory&lt;TEntryPoint&gt;</code></td><td>在<strong>同一个进程</strong>跑你的 <code>Program.cs</code>，<strong>不绑真实端口</strong></td></tr>
+<tr><td><code>IClassFixture&lt;T&gt;</code></td><td>xUnit 类级共享生命周期：一个测试类只 new 一次 factory</td></tr>
+<tr><td><code>factory.CreateClient()</code></td><td>拿到内存 <code>HttpClient</code>，直接 <code>GetAsync("/")</code> 就命中路由</td></tr>
+</tbody>
+</table>
+
+<div class="key">
+<strong>省钱点：</strong>不开端口、不启动 Kestrel TCP listener，纯走 in-memory pipeline。<strong>比 <code>dotnet run</code> + 真 HTTP 快 10x+</strong>。
+</div>
+
+<h3>3. Program.cs 必须开"小窗户"</h3>
+<pre><code>// Program.cs 末尾
+public partial class Program { }   // ← 测试可见的"挂钩点"</code></pre>
+
+<div class="danger">
+顶级语句默认把 <code>Program</code> 类做成 <code>internal</code>，测试项目（另一个 assembly）拿不到。<br>
+<strong>没这一行 <code>WebApplicationFactory&lt;Program&gt;</code> 编译都过不去。</strong>这是微软官方推荐的 standard pattern。
+</div>
+
+<h3>4. EnsureSuccessStatusCode 是双刃剑</h3>
+<pre><code>// ✅ 正路径
+response.EnsureSuccessStatusCode();          // 非 2xx 就 throw
+
+// ❌ 反路径不能用：会因为 400 抛出，反而让"我期望 400"的测试假失败
+// ✅ 测错误路径永远直接断言 StatusCode：
+Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);</code></pre>
+
+<h3>5. PostAsJsonAsync — 不用手写 JSON</h3>
+<pre><code>var reading = new { Celsius = 25.0 };          // 匿名对象
+var response = await _client.PostAsJsonAsync("/readings", reading);</code></pre>
+
+<div class="key">
+<code>PostAsJsonAsync</code>（来自 <code>System.Net.Http.Json</code>）做 3 件事：① 序列化对象 → JSON ② 设 <code>Content-Type: application/json</code> ③ 发 POST。<br>
+比手搓 <code>StringContent + Encoding.UTF8 + "application/json"</code> 干净 5 倍。
+</div>
+
+<h2>Part B · Docker 多阶段构建（Multi-Stage Build）</h2>
+
+<h3>1. 为什么要多阶段？</h3>
+<table>
+<thead><tr><th></th><th>单阶段（用 SDK 镜像）</th><th>多阶段</th></tr></thead>
+<tbody>
+<tr><td>体积</td><td>~1.5 GB</td><td><strong>~92.9 MB</strong>（节省 94%）</td></tr>
+<tr><td>包含什么</td><td>SDK + 编译器 + NuGet 缓存 + 调试符号</td><td>只 runtime + publish 产物</td></tr>
+<tr><td>攻击面</td><td>大（编译器是攻击者最爱）</td><td>小</td></tr>
+</tbody>
+</table>
+
+<h3>2. 完整 Dockerfile</h3>
+<pre><code># Stage 1: Build
+FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
+WORKDIR /src
+COPY TemperatureSensor.Api/TemperatureSensor.Api.csproj TemperatureSensor.Api/
+COPY TemperatureSensor.Core/TemperatureSensor.Core.csproj TemperatureSensor.Core/
+RUN dotnet restore TemperatureSensor.Api/TemperatureSensor.Api.csproj
+COPY . .
+RUN dotnet publish TemperatureSensor.Api/TemperatureSensor.Api.csproj -c Release -o /app/publish
+
+# Stage 2: Runtime
+FROM mcr.microsoft.com/dotnet/aspnet:9.0
+WORKDIR /app
+COPY --from=build /app/publish .
+EXPOSE 8080
+ENV ASPNETCORE_URLS=http://+:8080
+ENTRYPOINT ["dotnet", "TemperatureSensor.Api.dll"]</code></pre>
+
+<h3>3. 锁定比喻（背下来）</h3>
+<div class="ok-box">
+<strong>"FROM 是 stage 分界线"</strong> — 每个 <code>FROM</code> 启动一个全新的临时容器<br>
+<strong>"只有 <code>COPY --from=&lt;stage&gt;</code> 是桥"</strong> — ENV / WORKDIR / 安装的包都不跨 stage<br>
+<strong>"Stage 2 没编译器"</strong> — 想跑 <code>dotnet build</code> 都没工具，只能跑预编译好的 <code>.dll</code><br>
+<strong>"92.9 MB 证明 Stage 2 是 runtime 不是 SDK"</strong> — 体积本身就是 multi-stage 正确性的证据
+</div>
+
+<h3>4. Dockerfile 必须放在共同父目录</h3>
+<pre><code>2026-05-25/
+├── Dockerfile               ← 这一层
+├── TemperatureSensor.Api/
+└── TemperatureSensor.Core/</code></pre>
+
+<div class="danger">
+<strong>锁定心法："Dockerfile 必须看得见所有它要 COPY 的项目。"</strong><br>
+<code>docker build .</code> 的 <code>.</code> 是 build context 根。Dockerfile 里 <code>COPY TemperatureSensor.Api/...</code> 是相对 context 根的。必须把 Dockerfile 放在所有 COPY 项目的<strong>共同祖先（common ancestor）</strong>目录。
+</div>
+
+<h3>5. Layer cache 优化：先 csproj，后源码</h3>
+<pre><code># ✅ 高效
+COPY *.csproj ./
+RUN dotnet restore
+COPY . .
+RUN dotnet publish
+
+# ❌ 低效（每次改 C# 都会重 restore）
+COPY . .
+RUN dotnet restore
+RUN dotnet publish</code></pre>
+
+<h2>Part C · 实战命令</h2>
+<pre><code># 构建镜像
+docker build -t temperature-sensor:dev .
+
+# 跑容器
+docker run -d --name ts -p 8080:8080 temperature-sensor:dev
+
+# 测试（注意：PowerShell 的 curl 是 Invoke-WebRequest 的别名！）
+curl.exe -i http://localhost:8080/
+curl.exe -i -X POST http://localhost:8080/readings -H "Content-Type: application/json" -d "{\"celsius\":25}"
+
+# 清理
+docker stop ts; docker rm ts</code></pre>
+
+<div class="danger">
+<strong>PS 的 <code>curl</code> 是别名陷阱：</strong>PowerShell 把 <code>curl</code> alias 到 <code>Invoke-WebRequest</code>，<code>-X</code> <code>-d</code> 都不认。<strong>必须显式写 <code>curl.exe</code></strong>（Windows 10+ 自带）。JSON body 还要双重转义：<code>"{\"celsius\":25}"</code>。
+</div>
+
+<h2>🎯 一句话总结</h2>
+<div class="key">
+单元测试 → 集成测试 → 容器化，<strong>0→1 生产软件全流程闭环完成</strong>。同一份二进制能跑在本地 / Docker / 任何支持 Linux 容器的云。<br>
+下一步：CI/CD pipeline + 部署到云。但现在，先庆祝。🎉
+</div>
+
+<p class="meta" style="margin-top: 40px; border-top: 1px solid #d0d7de; padding-top: 16px;">
+— 显微镜 + 风洞 + 移动城堡。今天最值钱的三个比喻。 —
+</p>
+
+</body>
+</html>

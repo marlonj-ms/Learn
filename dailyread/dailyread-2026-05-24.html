@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>2026-05-24 · DI Lifetime 追踪 + API/HTTP/REST 概念</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; max-width: 860px; margin: 40px auto; padding: 0 24px 80px; line-height: 1.75; color: #1f2328; background: #fbfbfb; }
+  h1 { border-bottom: 3px solid #1a7f37; padding-bottom: 8px; color: #1a7f37; }
+  h2 { border-left: 4px solid #1a7f37; padding-left: 10px; margin-top: 34px; color: #1f2328; font-size: 1.3em; }
+  h3 { color: #1a7f37; margin-top: 22px; font-size: 1.08em; }
+  code { background: #eef2f6; padding: 2px 6px; border-radius: 4px; font-family: "Consolas", monospace; font-size: 0.94em; color: #cf222e; }
+  pre { background: #1f2328; color: #e6edf3; padding: 12px 16px; border-radius: 8px; overflow-x: auto; font-size: 0.86em; }
+  pre code { background: none; color: inherit; padding: 0; }
+  .key { background: #ddf4ff; border-left: 4px solid #0969da; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .note { background: #fff8c5; border-left: 4px solid #d4a72c; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .danger { background: #ffebe9; border-left: 4px solid #cf222e; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .ok-box { background: #dafbe1; border-left: 4px solid #1a7f37; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  a { color: #0969da; text-decoration: none; } a:hover { text-decoration: underline; }
+  .back { font-size: 0.9em; color: #57606a; margin-bottom: 16px; }
+  .meta { color: #57606a; font-size: 0.9em; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; }
+  th, td { border: 1px solid #d0d7de; padding: 6px 10px; text-align: left; vertical-align: top; }
+  th { background: #f6f8fa; }
+</style>
+</head>
+<body>
+
+<div class="back"><a href="../dailyread.html">返回首页</a></div>
+
+<h1>DI Lifetime 追踪 + API/HTTP/REST 概念奠基</h1>
+<p class="meta">2026-05-24 · 5 分钟复习 · 配套：<a href="../2026-05-24/DI-Lifetime-Tracing-Summary.md">DI Lifetime Tracing</a> · <a href="../2026-05-24/API-Concepts-Foundations-Summary.md">API/HTTP/REST 概念</a> · <a href="../2026-05-24/Lifetime-Drill/Program.cs">Lifetime-Drill</a></p>
+
+<div class="ok-box">
+<strong>今天主线：</strong>上半天造了 <code>Lifetime-Drill</code>，用 <code>ProbeService</code> 的 <code>Guid Id</code> 把 Transient/Singleton/Scoped 的差别<strong>看见</strong>了；下半天 <strong>主动叫停</strong>明天的 REST API 实操，先把 API → HTTP → REST 三个概念吃透。<br>
+<strong>结果：</strong>Session N+1 正式收官；明天动手时不再被"幂等""状态码""资源动词"这种词卡住。
+</div>
+
+<h2>Part A · DI 的 4 个阶段（用 trace 看到的）</h2>
+<table>
+<thead><tr><th>阶段</th><th>代码</th><th>做了什么</th><th>构造函数有没有跑</th></tr></thead>
+<tbody>
+<tr><td>1. REGISTRATION</td><td><code>services.Add...</code></td><td>把 (ServiceType → ImplementationType, Lifetime) 塞进列表</td><td>❌ 没有</td></tr>
+<tr><td>2. BUILD</td><td><code>BuildServiceProvider()</code></td><td>把注册列表"冻结"成可解析的容器</td><td>❌ 没有</td></tr>
+<tr><td>3. RESOLVE</td><td><code>GetRequiredService&lt;T&gt;()</code></td><td>按需构造依赖图（bottom-up）</td><td>✅ 这里才跑</td></tr>
+<tr><td>4. USE</td><td>业务调用</td><td>调方法处理数据</td><td>已经构造完，无关</td></tr>
+</tbody>
+</table>
+
+<div class="key">
+<strong>锚句：</strong>Registration ≠ construction. <code>BuildServiceProvider()</code> only freezes the rule book.
+</div>
+
+<h2>Part B · Lifetime-Drill 的发现</h2>
+<pre><code>public sealed class ProbeService
+{
+    public Guid Id { get; } = Guid.NewGuid();
+    public ProbeService() =&gt; Console.WriteLine($"[CTOR] new Probe {Id}");
+}</code></pre>
+
+<table>
+<thead><tr><th>注册方式</th><th>同 scope 两次 resolve</th><th>跨 scope</th><th>结论</th></tr></thead>
+<tbody>
+<tr><td><code>AddTransient</code></td><td>2 个 Guid</td><td>2 个 Guid</td><td>每次都 new</td></tr>
+<tr><td><code>AddSingleton</code></td><td>1 个 Guid</td><td>1 个 Guid</td><td>provider 共享</td></tr>
+<tr><td><code>AddScoped</code></td><td>1 个 Guid</td><td>2 个 Guid</td><td>scope 内共享</td></tr>
+</tbody>
+</table>
+
+<div class="danger">
+<strong>反模式：</strong>把 <code>Scoped</code> 注入 <code>Singleton</code> → Singleton 永远持有第一次 scope 的对象 → 数据陈旧 / 内存泄漏。<br>
+<code>ValidateScopes = true</code>（ASP.NET Core 在 Development 环境自动开启）能在启动期抓出这种错。
+</div>
+
+<h2>Part C · "23 个 services" 之谜</h2>
+<div class="key">
+调用 <code>AddLogging(...)</code> 之后 <code>services.Count</code> 跳到 23，不是 bug。<br>
+原因：<code>AddLogging</code> 是<strong>注册宏（registration macro）</strong>，内部会偷偷追加：<code>ILoggerFactory</code> / <code>ILogger&lt;&gt;</code> / Filter 配置 / Options 管线（<code>IOptions&lt;&gt;</code>、<code>IOptionsMonitor&lt;&gt;</code>）等。<br>
+<strong>心智模型：</strong>每个 <code>AddXyz</code> 都是一个"导入 service descriptor 的包"。
+</div>
+
+<h2>Part D · API 的真定义</h2>
+<div class="key">
+<strong>API = 调用方和被调用方之间的契约（contract）。</strong><br>
+契约 = <strong>签名（signature / shape）</strong> + <strong>语义（semantic / behavior）</strong>。<br>
+锚句：<strong>"Compiler checks the signature. Humans (and tests) check the semantics."</strong>
+</div>
+
+<table>
+<thead><tr><th>层级</th><th>例子</th></tr></thead>
+<tbody>
+<tr><td>方法 API</td><td><code>double RecordReading(double celsius)</code></td></tr>
+<tr><td>类的公开 API</td><td>类的 <code>public</code> 成员</td></tr>
+<tr><td>库 API</td><td><code>TemperatureSensor.Core.dll</code> 的 public 表面</td></tr>
+<tr><td>进程间 API（IPC）</td><td>pipe / shared memory / unix socket</td></tr>
+<tr><td>网络 API</td><td>HTTP / gRPC / GraphQL ← 明天目标</td></tr>
+</tbody>
+</table>
+
+<h2>Part E · HTTP 比方法调用多一种结局</h2>
+<table>
+<thead><tr><th></th><th>结局</th></tr></thead>
+<tbody>
+<tr><td>Method call</td><td>① 抛异常 ② 返回值（<strong>2 种</strong>）</td></tr>
+<tr><td>HTTP call</td><td>① 抛异常 ② 返回值 ③ <strong>消息送达但响应丢了</strong>（<strong>3 种</strong>）</td></tr>
+</tbody>
+</table>
+
+<div class="danger">
+<strong>第三种结局叫部分失败（partial failure）：</strong>服务器记录成功 → 响应丢包 → 客户端以为失败 → 重试 → 同一笔被记两次。<br>
+所以 HTTP 世界必须懂：<strong>幂等性（idempotency）</strong>、<strong>重试 + 去重</strong>、<strong><code>Idempotency-Key</code> 头</strong>。
+</div>
+
+<h2>Part F · HTTP 动词 + 幂等性</h2>
+<table>
+<thead><tr><th>动词</th><th>含义</th><th>幂等？</th></tr></thead>
+<tbody>
+<tr><td><code>GET</code></td><td>读</td><td>✅</td></tr>
+<tr><td><code>POST</code></td><td>创建 / 提交</td><td>❌</td></tr>
+<tr><td><code>PUT</code></td><td>整体替换</td><td>✅</td></tr>
+<tr><td><code>DELETE</code></td><td>删除</td><td>✅</td></tr>
+</tbody>
+</table>
+
+<h2>Part G · 状态码三段心法 ⭐</h2>
+<div class="ok-box">
+<strong>"2xx 我做了。4xx 你错了。5xx 我错了。4xx 不重试，5xx 看幂等。"</strong>
+</div>
+
+<table>
+<thead><tr><th>范围</th><th>含义</th><th>常见</th><th>客户端该重试吗？</th></tr></thead>
+<tbody>
+<tr><td><code>2xx</code></td><td>我做了</td><td><code>200</code> / <code>201</code> / <code>202</code> / <code>204</code></td><td>—</td></tr>
+<tr><td><code>4xx</code></td><td>你错了</td><td><code>400</code> / <code>401</code> / <code>404</code> / <code>409</code></td><td>❌</td></tr>
+<tr><td><code>5xx</code></td><td>我错了</td><td><code>500</code> / <code>502</code> / <code>503</code></td><td>✅（前提：幂等）</td></tr>
+</tbody>
+</table>
+
+<h3>2xx 内部细分</h3>
+<ul>
+<li><code>200 OK</code> — 做完了，结果在响应体里</li>
+<li><code>201 Created</code> — 已创建资源，新地址在 <code>Location</code> 头</li>
+<li><code>202 Accepted</code> — 已收下，还在处理（异步）</li>
+<li><code>204 No Content</code> — 做完了，没东西返回</li>
+</ul>
+
+<h2>Part H · REST = URL 名词 + HTTP 动词 + stateless</h2>
+<table>
+<thead><tr><th>操作</th><th>RESTful 写法</th><th>非 RESTful 写法</th></tr></thead>
+<tbody>
+<tr><td>读用户</td><td><code>GET /users/42</code></td><td><code>GET /getUser?id=42</code></td></tr>
+<tr><td>创建用户</td><td><code>POST /users</code></td><td><code>POST /createUser</code></td></tr>
+<tr><td>更新用户</td><td><code>PUT /users/42</code></td><td><code>POST /updateUser</code></td></tr>
+<tr><td>删除用户</td><td><code>DELETE /users/42</code></td><td><code>POST /deleteUser?id=42</code></td></tr>
+</tbody>
+</table>
+
+<div class="key">
+<strong>stateless（无状态）</strong>：每个请求自带所有信息，服务器不在内存里记上一次。这样多台服务器才能负载均衡，挂了一台不影响业务。
+</div>
+
+<h2>🎯 一句话总结</h2>
+<div class="key">
+DI 4 阶段心智模型 + REST 三段心法已经稳。明天动手写 <code>dotnet new web</code> 时，HTTP 动词、状态码、idempotency 都不会再卡住。<strong>Session N+1 关门，Session N+2 准备开门。</strong>
+</div>
+
+<p class="meta" style="margin-top: 40px; border-top: 1px solid #d0d7de; padding-top: 16px;">
+— 主动叫停去补概念，是一次正确的选择。 —
+</p>
+
+</body>
+</html>
