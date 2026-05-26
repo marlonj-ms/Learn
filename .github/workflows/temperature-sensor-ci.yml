@@ -1,0 +1,35 @@
+name: Temperature Sensor CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-test-and-image:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Restore API
+        run: dotnet restore 2026-05-25/TemperatureSensor.Api/TemperatureSensor.Api.csproj
+
+      - name: Build API
+        run: dotnet build 2026-05-25/TemperatureSensor.Api/TemperatureSensor.Api.csproj --configuration Release --no-restore
+
+      - name: Run core unit tests
+        run: dotnet test 2026-05-26/TemperatureSensor.Core.Tests/TemperatureSensor.Core.Tests.csproj --configuration Release
+
+      - name: Run API integration tests
+        run: dotnet test 2026-05-26/TemperatureSensor.Api.Tests/TemperatureSensor.Api.Tests.csproj --configuration Release
+
+      - name: Build Docker image
+        run: docker build -t temperature-sensor:ci 2026-05-25
