@@ -1,0 +1,656 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>2026-05-27 · CI/CD 闭环 + Kestrel 深挖 + ACA 部署 🎯</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; max-width: 860px; margin: 40px auto; padding: 0 24px 80px; line-height: 1.75; color: #1f2328; background: #fbfbfb; }
+  h1 { border-bottom: 3px solid #1a7f37; padding-bottom: 8px; color: #1a7f37; }
+  h2 { border-left: 4px solid #1a7f37; padding-left: 10px; margin-top: 34px; color: #1f2328; font-size: 1.3em; }
+  h3 { color: #1a7f37; margin-top: 22px; font-size: 1.08em; }
+  code { background: #eef2f6; padding: 2px 6px; border-radius: 4px; font-family: "Consolas", monospace; font-size: 0.94em; color: #cf222e; }
+  pre { background: #1f2328; color: #e6edf3; padding: 12px 16px; border-radius: 8px; overflow-x: auto; font-size: 0.86em; }
+  pre code { background: none; color: inherit; padding: 0; }
+  .key { background: #ddf4ff; border-left: 4px solid #0969da; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .note { background: #fff8c5; border-left: 4px solid #d4a72c; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .danger { background: #ffebe9; border-left: 4px solid #cf222e; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .ok-box { background: #dafbe1; border-left: 4px solid #1a7f37; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  a { color: #0969da; text-decoration: none; } a:hover { text-decoration: underline; }
+  .back { font-size: 0.9em; color: #57606a; margin-bottom: 16px; }
+  .meta { color: #57606a; font-size: 0.9em; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; }
+  th, td { border: 1px solid #d0d7de; padding: 6px 10px; text-align: left; vertical-align: top; }
+  th { background: #f6f8fa; }
+</style>
+</head>
+<body>
+
+<div class="back"><a href="../dailyread.html">返回首页</a></div>
+
+<h1>CI/CD 闭环 + Kestrel 深挖 + ACA 部署 🎯</h1>
+<p class="meta">2026-05-27 · 三段 · 配套：<a href="../2026-05-27/CI-CD-Closeout-Summary.md">CI Summary</a> · <a href="../2026-05-27/Kestrel-Docker-DeepDive-Summary.md">Kestrel Summary</a> · <a href="../2026-05-27/ACA-Deployment-Milestone-Summary.md">ACA Summary</a> · <a href="https://github.com/marlonj-ms/Learn/actions/runs/26487205739">Run #3 (success)</a></p>
+
+<div class="ok-box">
+<strong>早上：</strong>把昨天只跑测试的 CI yml 补完整 — 加 <strong>docker build + push 到 GHCR</strong>。Run #3 全绿，<code>ghcr.io/marlonj-ms/temperature-sensor:&lt;sha&gt;</code> 进 registry，CI 闭环 ✅<br>
+<strong>傍晚：</strong>从 Dockerfile 里 <code>FROM sdk</code> 和 <code>FROM aspnet</code> 的差异出发，把 <strong>SDK / Runtime / Kestrel / 反向代理 / 容器网络 namespace / 云原生扩缩容</strong> 全部串通，纠正了"Kestrel 是测试工具"和"in-process server 太 heavy"两个大误区。<br>
+<strong>晚上 🎯：</strong>把今早的 GHCR 镜像真正部署到 <strong>Azure Container Apps</strong>。<code>cae-tempsensor-dev</code> + <code>temperature-sensor</code> app 在 eastasia 跑起来，4 个 curl 端到端验证全过（GET / · POST 25/100°C · POST malformed）。<strong>CI → CD 链路彻底闭合</strong>。
+</div>
+
+<h2>Part A · 完整 CI/CD pipeline 长什么样</h2>
+
+<pre><code>git push main
+  ↓
+GitHub Actions runs the job
+  ↓
+checkout → setup .NET → restore → build
+  ↓
+unit tests (13) → integration tests (3)
+  ↓
+docker login (GHCR with GITHUB_TOKEN)
+  ↓
+docker build + push (one step)
+  ↓
+ghcr.io/marlonj-ms/temperature-sensor:&lt;commit-sha&gt;     ← 不可变 tag
+ghcr.io/marlonj-ms/temperature-sensor:latest          ← 飘移 alias</code></pre>
+
+<div class="key">
+<strong>锚句：</strong>CI = 每次 push 都验证 + 产出可部署 artifact。<strong>"代码可以走"</strong> + <strong>"成品在哪"</strong>，两件事一气呵成。
+</div>
+
+<h2>Part B · 5 个新锁定口诀</h2>
+
+<table>
+<thead><tr><th>#</th><th>口诀</th><th>解释</th></tr></thead>
+<tbody>
+<tr><td>1</td><td><code>:latest</code> 是生产毒药</td><td>CI/CD 永远给 immutable tag（commit sha / version）。<code>:latest</code> 只是"方便人记"的飘移 alias</td></tr>
+<tr><td>2</td><td><code>GITHUB_TOKEN</code> 的作用域 = job</td><td>每个 job 自动注入一个 ephemeral token。<strong>没有 step 级 permissions</strong>，只有 workflow 顶层或 job 顶层</td></tr>
+<tr><td>3</td><td>PR build, but only main push</td><td><code>push: ${{ github.event_name == 'push' }}</code> 让 PR 完整跑流程又不污染 registry</td></tr>
+<tr><td>4</td><td>build-push-action = 一站式</td><td>不要分 build/push 两步，<code>docker/build-push-action@v6</code> 内部走 buildx，自带 layer cache + multi-arch</td></tr>
+<tr><td>5</td><td>CI runner FS ≠ Docker build context</td><td>runner 上 checkout 的目录 vs daemon 看到的 build context 是两个世界。<code>context: 2026-05-25</code> 告诉 daemon 从哪里抓</td></tr>
+</tbody>
+</table>
+
+<h2>Part C · 关键 yml 片段</h2>
+
+<h3>1. 权限块（最小权限原则）</h3>
+<pre><code>jobs:
+  build-test-and-image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read         # ← 读源码
+      packages: write        # ← 写 GHCR</code></pre>
+
+<div class="key">
+GitHub Actions 给每个 job 自动注入的 <code>GITHUB_TOKEN</code> <strong>默认只读</strong>。要写 GHCR / Issues / PR comments，必须显式 <code>opt-in</code>。
+</div>
+
+<h3>2. 登录 GHCR</h3>
+<pre><code>- name: Log in to GHCR
+  uses: docker/login-action@v3
+  with:
+    registry: ghcr.io
+    username: ${{ github.actor }}
+    password: ${{ secrets.GITHUB_TOKEN }}</code></pre>
+
+<p>它内部其实就跑：<code>echo $TOKEN | docker login ghcr.io -u marlonj-ms --password-stdin</code>。</p>
+
+<h3>3. build + push 一步</h3>
+<pre><code>- name: Build &amp; push image
+  uses: docker/build-push-action@v6
+  with:
+    context: 2026-05-25
+    push: ${{ github.event_name == 'push' }}
+    tags: |
+      ghcr.io/marlonj-ms/temperature-sensor:${{ github.sha }}
+      ghcr.io/marlonj-ms/temperature-sensor:latest</code></pre>
+
+<div class="key">
+<strong>多 tag 不重新构建。</strong>同一个 image id 贴两个名字而已，<code>latest</code> 和 <code>sha</code> 永远指向同一个二进制。
+</div>
+
+<h2>Part D · GitHub Actions context 变量（要记的）</h2>
+
+<table>
+<thead><tr><th>变量</th><th>值</th><th>用途</th></tr></thead>
+<tbody>
+<tr><td><code>${{ github.sha }}</code></td><td>触发本次 run 的 commit SHA</td><td>给镜像打不可变 tag</td></tr>
+<tr><td><code>${{ github.actor }}</code></td><td>触发本次 run 的 GitHub 用户名</td><td>docker login 的 username</td></tr>
+<tr><td><code>${{ github.event_name }}</code></td><td><code>push</code> / <code>pull_request</code> / <code>schedule</code></td><td>分支判断（PR 不推、只 main 推）</td></tr>
+<tr><td><code>${{ secrets.GITHUB_TOKEN }}</code></td><td>自动注入的 job-scoped token</td><td>不用自己生成 PAT</td></tr>
+</tbody>
+</table>
+
+<div class="danger">
+<strong>陷阱：</strong><code>${{ github.sha }}</code> 是<strong>触发 run 的 commit 的 sha</strong>，不是 yml 文件本身的 sha。改 yml 文件 push 一次，那次的 commit sha 就是 <code>github.sha</code>。
+</div>
+
+<h2>Part E · GHCR 推成功了为什么 REST 返 401？</h2>
+
+<div class="danger">
+<strong>原因：包默认是 private。</strong>未认证的 REST endpoint 看不到私有包 → 返 401 Unauthorized。<strong>这不代表 push 失败。</strong>
+</div>
+
+<p>3 种查看方式：</p>
+
+<table>
+<thead><tr><th>方式</th><th>命令 / 链接</th></tr></thead>
+<tbody>
+<tr><td>1. UI（最快）</td><td><a href="https://github.com/marlonj-ms?tab=packages">https://github.com/marlonj-ms?tab=packages</a></td></tr>
+<tr><td>2. 认证 REST</td><td><code>Invoke-RestMethod -Headers @{Authorization='Bearer &lt;PAT&gt;'} -Uri 'https://api.github.com/users/marlonj-ms/packages/container/temperature-sensor/versions'</code></td></tr>
+<tr><td>3. docker pull</td><td><code>docker login ghcr.io -u marlonj-ms</code>（密码用 PAT, <code>read:packages</code> scope）→ <code>docker pull ghcr.io/marlonj-ms/temperature-sensor:latest</code></td></tr>
+</tbody>
+</table>
+
+<h2>Part F · 反复踩的坑（追加进 cheatsheet）</h2>
+
+<div class="danger">
+<strong>坑 30：CI 里 <code>permissions:</code> 没有 step 级</strong> — 只能在 workflow 顶层或 job 顶层。
+</div>
+
+<div class="danger">
+<strong>坑 31：<code>:latest</code> 看着方便，生产是定时炸弹</strong> — 引用具体的 immutable sha tag，回滚才有底气。
+</div>
+
+<div class="danger">
+<strong>坑 32：GHCR 推成功 ≠ 公开可见</strong> — 默认 visibility 是 private，匿名 REST 返 401 不代表 push 失败。
+</div>
+
+<div class="danger">
+<strong>坑 33：<code>${{ github.sha }}</code> 不是 yml 文件的 sha</strong> — 它是触发本次 run 的 commit 的 sha。
+</div>
+
+<h2>� 晚场补充：Kestrel + SDK + 反向代理 概念深挖</h2>
+
+<p class="meta">早上 CI 收尾后，从一个 Dockerfile 的 SDK/runtime 问题出发，把 Kestrel 真身、反向代理、容器网络 namespace、云原生扩缩容串起来。配套：<a href="../2026-05-27/Kestrel-Docker-DeepDive-Summary.md">完整 Summary</a></p>
+
+<h3>1. 三层镜像金字塔</h3>
+<pre><code>mcr.microsoft.com/dotnet/sdk:9.0       ~850 MB  ← 含编译器 + ASP.NET Core 框架 + Runtime
+mcr.microsoft.com/dotnet/aspnet:9.0    ~220 MB  ← 含 ASP.NET Core 框架 + Runtime
+mcr.microsoft.com/dotnet/runtime:9.0   ~200 MB  ← 只有 .NET Runtime（跑 web app 会启动失败）</code></pre>
+
+<div class="key">
+<strong>多阶段配方：</strong>Stage 1 (build) 用 <code>sdk</code> 编译 → Stage 2 (run) 用 <code>aspnet</code> 跑。<br>
+<strong>为什么 web app 不能用 <code>runtime</code>？</strong>ASP.NET Core 是独立的 shared framework，<code>runtimeconfig.json</code> 启动期检查发现没装就 <code>framework not found</code> 立刻失败。
+</div>
+
+<h3>2. Kestrel 是真 web server（不是测试工具）</h3>
+
+<div class="danger">
+<strong>误区：</strong>"Kestrel 是测试的虚拟 IIS 替身，生产要换成真 web server。"<br>
+<strong>正解：</strong>Kestrel 在生产里就是直接接 TCP、解析 HTTP、跑你 C# 代码的那个家伙。<strong>没有任何东西替代它。</strong>
+</div>
+
+<table>
+<thead><tr><th>层</th><th>角色</th><th>类比</th></tr></thead>
+<tbody>
+<tr><td>客户端</td><td>发请求</td><td>顾客</td></tr>
+<tr><td>反向代理（Envoy / nginx / IIS-as-proxy）</td><td>TLS termination、负载均衡、缓存、边缘安全</td><td>餐厅前台</td></tr>
+<tr><td><strong>Kestrel</strong></td><td>解析 HTTP、调你的 endpoint handler</td><td><strong>厨师（永远是它做菜）</strong></td></tr>
+<tr><td>你的 C# 代码</td><td>业务逻辑</td><td>菜谱</td></tr>
+</tbody>
+</table>
+
+<h3>3. 10 个容器都听 8080，怎么不打架？</h3>
+
+<div class="key">
+<strong>关键概念：</strong>Linux 给每个容器独立的 <strong>网络命名空间（network namespace）</strong>。<br>
+容器 A 的 8080 跟容器 B 的 8080 <strong>根本不是同一个东西</strong>，在两个隔离世界里。<br>
+冲突只发生在你想从容器外面访问时 — 那时候靠 <code>docker run -p 5001:8080</code> 在 host 上做端口映射。
+</div>
+
+<pre><code>┌─ Container 1 ──┐  ┌─ Container 2 ──┐  ┌─ Container 10 ─┐
+│ Kestrel :8080  │  │ Kestrel :8080  │  │ Kestrel :8080  │  ← 内部端口，各自独立
+└────────────────┘  └────────────────┘  └────────────────┘
+        ↑                    ↑                    ↑
+        └────────────────────┴────────────────────┘
+                             │
+                  ┌──────────┴─────────┐
+                  │  反向代理 / LB     │  ← 这一层做分发
+                  └────────────────────┘</code></pre>
+
+<h3>4. 反直觉：Kestrel 比 IIS 更轻更快</h3>
+
+<table>
+<thead><tr><th>指标</th><th>IIS + Worker</th><th>Kestrel（同进程）</th></tr></thead>
+<tbody>
+<tr><td>进程数</td><td>2 个</td><td>1 个</td></tr>
+<tr><td>请求路径</td><td>client → IIS → IPC → worker</td><td>client → Kestrel（无 IPC）</td></tr>
+<tr><td>跨平台</td><td>Windows only</td><td>Win / Linux / macOS</td></tr>
+<tr><td>TechEmpower benchmark</td><td>中等</td><td><strong>全球前 5</strong></td></tr>
+<tr><td>启动时间</td><td>慢</td><td>~1 秒</td></tr>
+</tbody>
+</table>
+
+<p><strong>为什么反而轻？</strong>异步 I/O 模型（async/await）+ 同进程无 IPC + <code>Span&lt;T&gt;</code>/<code>ArrayPool&lt;T&gt;</code> buffer 池减少 GC。</p>
+
+<h3>5. 云原生设计的精髓：代码层稳定，元数据层动态</h3>
+
+<div class="ok-box">
+<strong>ACA 从 3 replica 扩到 10 replica 时：</strong><br>
+✅ <strong>变</strong>：Envoy 路由表里登记的后端 IP 列表（要加新机器）<br>
+🚫 <strong>不变</strong>：host 上的 443、容器内部 8080、你的 C# 代码<br><br>
+<strong>范式翻转：</strong>以前靠"把 server 做大"扛流量；现在靠"把 app 做小、做多、做独立"扛流量。
+</div>
+
+<h3>6. 晚场新加的坑（cheatsheet 35–37）</h3>
+
+<div class="danger">
+<strong>坑 35：<code>runtime:9.0</code> 没有 ASP.NET Core 框架</strong> — web app 用它跑会启动立刻失败，<code>framework not found</code>。要用 <code>aspnet:9.0</code>。
+</div>
+
+<div class="danger">
+<strong>坑 36：容器内部端口 ≠ host 端口</strong> — 10 个容器都用 8080 在容器内合法；本地多开必须改 host 端口（<code>-p 5001:8080</code>）。
+</div>
+
+<div class="danger">
+<strong>坑 37：反向代理 ≠ Kestrel 的替代品</strong> — Envoy/nginx/IIS-as-proxy 都在 Kestrel 前面，<strong>Kestrel 永远还在跑</strong>。
+</div>
+
+<h2>🚀 晚场 #3：把镜像真正搬到 Azure — ACA 部署里程碑</h2>
+
+<p class="meta">把今早 GHCR 里的镜像拉到 Azure Container Apps，端到端跑起来。配套：<a href="../2026-05-27/ACA-Deployment-Milestone-Summary.md">完整 Summary</a></p>
+
+<div class="ok-box">
+<strong>已交付（live）：</strong><br>
+• Container App: <code>temperature-sensor</code> in rg <code>marlondb</code> / eastasia<br>
+• Environment: <code>cae-tempsensor-dev</code><br>
+• Image: <code>ghcr.io/marlonj-ms/temperature-sensor:latest</code>（<strong>public</strong>，无需 PAT）<br>
+• FQDN: <code>https://temperature-sensor.thankfulplant-cb0fc5e9.eastasia.azurecontainerapps.io</code><br>
+• Scale: min=1, max=3, cpu=0.25, mem=0.5Gi
+</div>
+
+<h3>1. 4 次 curl 端到端验证</h3>
+
+<table>
+<thead><tr><th>#</th><th>请求</th><th>结果</th></tr></thead>
+<tbody>
+<tr><td>1</td><td><code>GET /</code></td><td><strong>200</strong> "Hello World!"</td></tr>
+<tr><td>2</td><td><code>POST /readings {"celsius":25}</code></td><td><strong>200</strong> + 日志 <code>Recorded reading: 25°C</code></td></tr>
+<tr><td>3</td><td><code>POST /readings {"celsius":100}</code></td><td><strong>200</strong> + 🔥 <code>THRESHOLD EXCEEDED ... threshold=30°C</code></td></tr>
+<tr><td>4</td><td><code>POST /readings {"bad":"json"}</code></td><td><strong>400</strong> — handler 根本没被 invoke</td></tr>
+</tbody>
+</table>
+
+<div class="key">
+<strong>关键证据：</strong>第 3 条的超温日志在云端 stdout 出现，证明 (a) 镜像跑得起来 (b) 配置链 <code>appsettings.json → env vars</code> 工作 (c) 组合根订阅 event 没漏。
+</div>
+
+<h3>2. ACA 是 3 层声明式金字塔</h3>
+
+<pre><code>┌─────────────────────────────────────────────────┐
+│ Container Apps Environment （cae-tempsensor-dev）│  ← Envoy + Log + Network 共享层
+│  ┌──────────────────────────────────────────┐   │
+│  │ Container App （temperature-sensor）     │   │  ← 1 个对外名字
+│  │  ┌───────────────────────────────────┐   │   │
+│  │  │ Revision (--jx1w89v)              │   │   │  ← 1 个不可变快照
+│  │  │  ┌────┐ ┌────┐ ┌────┐             │   │   │
+│  │  │  │Pod1│ │Pod2│ │Pod3│ ...         │   │   │  ← 0..N 个真容器
+│  │  │  └────┘ └────┘ └────┘             │   │   │
+│  │  └───────────────────────────────────┘   │   │
+│  └──────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────┘</code></pre>
+
+<div class="key">
+<strong>锚句：</strong>"Environment 是房子，App 是户号，Revision 是不可变照片，Pod 是真活的人。"
+</div>
+
+<h3>3. Revision 是 immutable — 云原生回滚的物理基础</h3>
+
+<pre><code>az containerapp update --image .../v2
+    ↓
+ACA 不修改旧 revision，而是：
+  1. 创建新 revision: temperature-sensor--abc123
+  2. 等新 rev 健康 → 切 100% traffic
+  3. 旧 rev 保留 → 秒级回滚兜底</code></pre>
+
+<p><strong>反例：</strong>传统 IIS 直接覆盖 wwwroot，出问题只能祈祷有备份。</p>
+
+<h3>4. Pod 数 = 你真正在花的钱</h3>
+
+<table>
+<thead><tr><th>min / max</th><th>0 流量时</th><th>流量爆炸时</th><th>账单</th></tr></thead>
+<tbody>
+<tr><td>1 / 3</td><td>1 pod 一直跑</td><td>最多 3 pod</td><td>有底价</td></tr>
+<tr><td><strong>0 / 5</strong></td><td><strong>0 pod（scale-to-zero）</strong></td><td>最多 5 pod</td><td><strong>闲时真零成本</strong>（冷启动代价）</td></tr>
+</tbody>
+</table>
+
+<h3>5. Autoscaler 不是即时的</h3>
+
+<pre><code>请求来了
+   ↓
+观察窗口 ~30s
+   ↓
+评估指标超阈值 → 决定扩
+   ↓
+启动新 pod ~10-20s
+   ↓
+~50 秒后才看得见新 pod</code></pre>
+
+<div class="note">
+<strong>Cooldown：</strong>scale-out 后 ~5 分钟才会开始 scale-in（防抖动）。<br>
+<strong>默认 HTTP 规则：</strong>每个 replica 同时 <strong>10 个并发</strong>才扩。30 个 curl 串行返回太快 → <strong>根本没堆积到阈值</strong>。<br>
+<strong>结论：</strong>想看扩缩演示要么持续 60s+ 真并发，要么直接 <code>--min-replicas 2</code>。
+</div>
+
+<h3>6. PowerShell 并发 — 5.1 vs 7+ 的坑</h3>
+
+<table>
+<thead><tr><th>方式</th><th>隔离</th><th>启动开销</th><th>版本</th></tr></thead>
+<tbody>
+<tr><td><code>Start-Job</code></td><td>进程（fork pwsh）</td><td>慢 ~1s</td><td>PS 5.1+</td></tr>
+<tr><td><code>Start-ThreadJob</code></td><td><strong>线程</strong>（同进程）</td><td>快 ~50ms</td><td>PS 5.1+（自带）</td></tr>
+<tr><td><code>ForEach-Object -Parallel</code></td><td>runspace</td><td>中</td><td><strong>PS 7+ only</strong></td></tr>
+</tbody>
+</table>
+
+<div class="danger">
+<strong>今天踩的坑：</strong><code>ForEach-Object -Parallel</code> 在 Windows PS 5.1 报 <code>AmbiguousParameterSet</code>。<br>
+<strong>5.1 根本没有这个特性。</strong>要么升 pwsh 7+，要么换 <code>Start-ThreadJob</code> / <code>Start-Process</code>。
+</div>
+
+<h3>7. 晚场新加的 3 个坑（cheatsheet 38–40）</h3>
+
+<div class="danger">
+<strong>坑 38：ACA <code>update --scale-rule</code> 会创建新 revision</strong> — Revision 是 immutable 的物理后果，看 revision list 别只看一个。
+</div>
+
+<div class="danger">
+<strong>坑 39：PowerShell 5.1 没有 <code>-Parallel</code> 参数</strong> — 那是 PS 7+ 才有。错误是 <code>AmbiguousParameterSet</code> 不是 <code>ParameterNotFound</code>，迷惑性强。
+</div>
+
+<div class="danger">
+<strong>坑 40：<code>replica list</code> 返回空 ≠ 服务挂了</strong> — 可能 (a) autoscaler 已缩回 (b) revision 名过期（被 update 替换）。先 <code>revision list --query "[?properties.active]"</code> 找当前 active。
+</div>
+
+<h2>🎯 今天 3 段合起来 — 一句话总结升级版</h2>
+<div class="key">
+<strong>早上学了工具链：</strong>commit push → CI 跑测试 → 镜像进 GHCR registry。<br>
+<strong>傍晚学了底层物理：</strong>镜像 = 自带 Kestrel 的进程；扩缩容 = 复制 N 份；反向代理 = 前面分流的人。<br>
+<strong>晚上做了真部署 🎯：</strong>GHCR 镜像 → Azure Container Apps → 4 个 curl 端到端 200/200/200/400。<br>
+<strong>三段拼起来：从 "代码 commit" 到 "Azure 上 Kestrel 在响应真请求" — 整条 CI/CD 链路 100% 闭合，物理一通到底。</strong>
+</div>
+
+<p class="meta" style="margin-top: 40px; border-top: 1px solid #d0d7de; padding-top: 16px;">
+— Environment 是房子，App 是户号，Revision 是不可变照片，Pod 是真活的人。 —
+</p>
+
+<h2>🌃 夜场 #4：Automation 理论闭环——“是不是真自动化”</h2>
+
+<p class="meta">被自己问住后出发，纯理论不动手（权限不够）。配套：<a href="../2026-05-27/Automation-OIDC-Theory-Summary.md">完整 Summary</a></p>
+
+<h3>1. 自动化 vs 脚本化 vs 手动 — 三层金字塔</h3>
+
+<pre><code>自动化 automation    ← 触发器是事件 / 时钟 / 上游产物，人不在回路里
+   ↑
+脚本化 scripting     ← 多步合为一步，但要人按（deploy.ps1 双击 / Ctrl+B）
+   ↑
+手动 manual           ← 一行一行敲（昨晚的 az containerapp create）</code></pre>
+
+<div class="key">
+<strong>锒句：</strong>“判断标准 = 触发器是不是机器自己产生的。脚本是自动化的前提条件，但本身不是自动化。”
+</div>
+
+<h3>2. “CI/CD 全程自动化”——昨晚这句其实是夸了</h3>
+
+<table>
+<thead><tr><th>阶段</th><th>触发器</th><th>执行者</th><th>自动化程度</th></tr></thead>
+<tbody>
+<tr><td>本地 dotnet test</td><td>你敲命令</td><td>你</td><td>0%</td></tr>
+<tr><td>早上 CI</td><td><code>git push</code></td><td>GitHub runner</td><td>~70%</td></tr>
+<tr><td>晚上 ACA 部署</td><td>你敲 <code>az ...</code></td><td>你</td><td>0% — 又退回手动</td></tr>
+<tr><td><strong>真 CI/CD</strong></td><td><code>git push</code></td><td>GitHub runner 全程跳到 az</td><td>95%</td></tr>
+</tbody>
+</table>
+
+<h3>3. OIDC 7 步握手——为什么不需要 client-secret</h3>
+
+<pre><code>setup（1 次性）：
+  你在 Azure 配 federated credential：
+    “我信任 GitHub OIDC issuer，且 sub 必须 = repo:marlonj-ms/Learn:ref:refs/heads/main”
+
+runtime（每次 push）：
+  1. runner 启动 azure/login
+  2. runner 找 GitHub OIDC service 要 JWT
+  3. GitHub 用私钥签个 JWT
+       sub = "repo:marlonj-ms/Learn:ref:refs/heads/main"
+       exp = 10 分钟后
+  4. runner 把 JWT 递给 Azure
+  5. Azure 拉 GitHub 公钥 → 验签 → 查名单 → 发 access token
+  6. runner 用 access token 跑 az containerapp update</code></pre>
+
+<div class="key">
+<strong>锒句：</strong>“Azure 不存 GitHub 的 secret。Azure 只信 GitHub 的公钥。没有长期密钥，没有泄露面。”
+</div>
+
+<h3>4. 纵深防御 4 层 — 今晚的核心架构图</h3>
+
+<pre><code>你 push / 同事 PR
+      ↓
+护栏 0: yml on: 触发器          ← GitHub 决定 workflow 跑不跑
+      ↓ 通过
+护栏 1: job 的 if: 条件           ← yml 决定具体 job 跑不跑
+      ↓ 通过
+护栏 2: OIDC subject 匹配          ← Azure 决定 token 给不给
+      ↓ 通过
+护栏 3: Azure RBAC                 ← Azure 决定 token 能干啥
+      ↓ 通过
+   实际改 ACA</code></pre>
+
+<div class="key">
+<strong>锒句：</strong>“任一层都能兑底你的 production。这是 defense in depth。”
+</div>
+
+<h3>5. 今晚最大的认知纠偏 — “pipeline 跑” ≠ “az login 成功”</h3>
+
+<table>
+<thead><tr><th></th><th>谁说了算</th><th>判断依据</th></tr></thead>
+<tbody>
+<tr><td><strong>pipeline 触发</strong></td><td>GitHub server</td><td>yml 的 on: 写了什么</td></tr>
+<tr><td><strong>az login 成功</strong></td><td>Azure AD</td><td>OIDC token 的 sub 对得上 federated cred 吗</td></tr>
+</tbody>
+</table>
+
+<p>PR 场景实际发生的：pipeline <strong>确实跑了</strong>，但 azure/login 这一步被 Azure 拒了。被触发 ≠ 被授权。</p>
+
+<h3>6. Skipped ≠ Failed</h3>
+
+<table>
+<thead><tr><th>状态</th><th>符号</th><th>算 workflow 通过吗</th></tr></thead>
+<tbody>
+<tr><td>Success</td><td>✅</td><td>✅</td></tr>
+<tr><td>Skipped</td><td>⏭️</td><td>✅（视同通过）</td></tr>
+<tr><td>Failed</td><td>❌</td><td>❌</td></tr>
+</tbody>
+</table>
+
+<div class="danger">
+<strong>生产坑：</strong>别把 deploy job 设为 Required status check——PR 时该 job 是 Skipped，会被看作 <em>missing</em>，卡住 PR merge 按钮。Required 只给 PR 时一定会跑的 job（build / test）。
+</div>
+
+<h3>7. 今晚未实操 — 诚实记一笔</h3>
+
+<div class="note">
+配 federated credential 需要 Entra ID Application Developer + rg User Access Administrator，共享 marlondb sub 不可能拿到。下一步选项：
+<ul>
+<li>A. 个人 Azure sub（MSDN / 试用）做实验</li>
+<li>B. fork repo 指向个人 sub</li>
+<li>C. DevOps ticket 让他们配 marlondb 的 OIDC</li>
+<li>D. <strong>理论先扎实，实操延后</strong> ← 今晚选的路径</li>
+</ul>
+</div>
+
+<h3>8. 夜场新加的 3 个坑（cheatsheet 41–43）</h3>
+
+<div class="danger">
+<strong>坊 41：自动化 ≠ 脚本化</strong> — 双击 deploy.ps1 / 按 Ctrl+B 不是自动化，只是“多步合一步”。触发器是人 = 脚本化，是机器 = 自动化。
+</div>
+
+<div class="danger">
+<strong>坊 42：“Pipeline 被触发” ≠ “az login 成功”</strong> — GitHub 决定前者（看 on: 事件），Azure 决定后者（看 OIDC sub）。PR 能跑 workflow 但拿不到 prod token，是 feature 不是 bug。
+</div>
+
+<div class="danger">
+<strong>坊 43：Required status check 别给 deploy job</strong> — PR 时 deploy job 是 Skipped，被分支保护视作 missing，卡住 merge。Required 只给 PR 时一定会跑的 job。
+</div>
+
+<h2>🎯 今天四段合起来 — 一句话总结终极版</h2>
+<div class="key">
+<strong>早：</strong>CI 闭环 — 代码 push → 镜像进 GHCR。<br>
+<strong>傍晚：</strong>理论闭环 — Kestrel 是真 server，反向代理在前面。<br>
+<strong>晚：</strong>手动 CD 闭环 — ACA 拉取镜像跳起来。<br>
+<strong>夜里 🎯：</strong>词汇闭环 — 承认 CD 还是手动的，下次说“自动化”不会再含糊。OIDC 4 层纵深防御 + GitHub×Azure 双决策权 ——现在能说出每一层护栏为什么存在。
+</div>
+
+<p class="meta" style="margin-top: 40px; border-top: 1px solid #d0d7de; padding-top: 16px;">
+— 脚本是自动化的前提，但本身不是自动化。被触发 ≠ 被授权。 —
+</p>
+
+<!-- ============================================================ -->
+<!-- Day 49 · Generics Session 1 — 基础重建 + variance park -->
+<!-- ============================================================ -->
+
+<hr style="margin: 60px 0; border: none; border-top: 2px dashed #1a7f37;">
+
+<h1 style="margin-top: 0;">Day 49 · Generics Session 1 — 基础重建 🛠️ + Variance 🅿️</h1>
+<p class="meta">追加段 · 配套：<a href="../2026-05-27/Generics-Session-1-Summary.md">Generics Summary</a> · <a href="../2026-05-27/Generics-Constraints-Variance.cs">Generics-Constraints-Variance.cs</a></p>
+
+<div class="ok-box">
+今天的实际收获 <strong>不是泛型本身</strong>——而是借着读 <code>Repository&lt;T&gt; where T : class, IAuditable</code> 这一行，把 C# 类定义的基础（构造、属性、init、required、=&gt;、4 种 new）整个重建了一遍。变性 (variance) 进度推到表层就 <strong>park</strong> 了，标好回头路。文件最终状态：<code>dotnet run</code> exit code = 0 ✅。
+</div>
+
+<h2>Part A · 第一个锚点：接口 ≠ DI</h2>
+
+<p>用户读到 <code>public interface IAuditable { ... }</code> 第一反应："这是 DI 吗？"——这是个关键混淆，今天先把它彻底劈开：</p>
+
+<table>
+<thead><tr><th>角度</th><th>接口（interface）</th><th>DI 容器（IServiceCollection）</th></tr></thead>
+<tbody>
+<tr><td>是什么</td><td>C# 语言特性，<strong>契约</strong></td><td>设计模式 + 框架</td></tr>
+<tr><td>用途</td><td>"我承诺有这些成员"</td><td>"请你帮我组装我的依赖"</td></tr>
+<tr><td>看到 <code>IAuditable</code></td><td><strong>不一定</strong>用 DI</td><td>DI 必用接口，反之不成立</td></tr>
+</tbody>
+</table>
+
+<div class="key">
+<strong>锚句：</strong>"<code>IAuditable</code> 在这个文件里只是泛型约束（<code>where T : IAuditable</code>），<strong>没有 IServiceCollection、AddSingleton、构造函数注入</strong>——所以这里和 DI 一点关系都没有。"
+</div>
+
+<h2>Part B · 类定义基础重建（今天 ROI 最高的一段）</h2>
+
+<h3>1. 类的 5 个部位一次对位</h3>
+<pre><code>public class Order : IAuditable                      // ④ 继承/接口实现
+{
+    public required string Id { get; init; }         // ③ 属性 + init + required
+    public DateTime CreatedAt { get; init; }
+        = DateTime.UtcNow;                           // ⑤ 默认值
+    public decimal Amount { get; init; }
+
+    public override string ToString()                // ② 方法
+        => $"Order(Id={Id}, Amount={Amount})";       //    用 => 简写
+}</code></pre>
+
+<h3>2. <code>=&gt;</code> 的三种身份（位置决定身份）</h3>
+<table>
+<thead><tr><th>位置</th><th>身份</th></tr></thead>
+<tbody>
+<tr><td><code>(x) =&gt; x * 2</code></td><td>Lambda — 输入到输出</td></tr>
+<tr><td><code>public int X =&gt; _x;</code></td><td>表达式属性体 — 简写 getter</td></tr>
+<tr><td><code>public int Add(int a, int b) =&gt; a + b;</code></td><td>表达式方法体 — 简写单返回式方法</td></tr>
+</tbody>
+</table>
+
+<h3>3. <code>new</code> 的 4 种语法</h3>
+<pre><code>new Order() { Id = "A-100", Amount = 88.8m }     // (1) 完整：ctor + 初始化器
+new Order   { Id = "A-100", Amount = 88.8m }     // (2) 省略空括号（仅无参构造）
+Order o = new() { Id = "A-100", Amount = 88.8m } // (3) target-typed (C# 9+)
+var list = new List&lt;int&gt; { 1, 2, 3 };            // (4) 集合初始化器</code></pre>
+
+<div class="note">
+<strong>要点：</strong>(2) 不是"括号被吞了"，而是 C# 允许在 <code>{ }</code> 跟随时省略<strong>无参</strong>括号。底层依然走无参构造 + 属性赋值。
+</div>
+
+<h3>4. <code>required</code> × 默认值 — 默认永远不会赢</h3>
+<pre><code>public required string Id { get; init; } = "DEFAULT";
+//          ↑ 编译期门卫              ↑ 运行期默认值
+
+new Order { /* Id 没传 */ }   // ❌ CS9035 — 编译失败
+new Order { Id = "DEFAULT" }  // ✅ 必须显式传</code></pre>
+
+<div class="key">
+<strong>锚句：</strong>"<code>required</code> 是<strong>编译期</strong>门卫，默认值是<strong>运行期</strong>值。编译失败的代码永远走不到运行期，所以默认值在 <code>required</code> 面前永远落败。"
+</div>
+
+<h2>Part C · 泛型约束 + 一个 CS 错误</h2>
+
+<h3>1. <code>new()</code> 约束是关于"方法体"，不是关于 T</h3>
+<pre><code>public class Repository&lt;T&gt; where T : class, IAuditable, new()
+{
+    public T CreateDefault() =&gt; new T();   // ← new() 约束存在的<strong>全部</strong>原因
+}</code></pre>
+<p>不写 <code>new()</code>，编译器不允许你在方法体里写 <code>new T()</code>——因为它没法保证 T 有公开无参构造。</p>
+
+<h3>2. CS9040 — <code>required</code> 和 <code>new()</code> 互斥</h3>
+<pre><code>public class Order : IAuditable
+{
+    public required string Id { get; init; }
+}
+
+public class Repository&lt;T&gt; where T : class, IAuditable, new()
+{
+    public T CreateDefault() =&gt; new T();   // ❌ CS9040
+    //  T = Order，Order 有 required 成员 → 不能无参构造
+}</code></pre>
+
+<div class="danger">
+<strong>解法：</strong>把 <code>new()</code> 约束 + <code>CreateDefault()</code> 一起注释掉。<strong>required</strong> 已经把"必须传值"写进类型签名；<strong>new()</strong> 承诺"我能无参构造"——两个承诺直接打架，编译器替你提前发现。
+</div>
+
+<h3>3. 常见泛型约束矩阵</h3>
+<table>
+<thead><tr><th>约束</th><th>含义</th></tr></thead>
+<tbody>
+<tr><td><code>where T : class</code></td><td>T 必须是引用类型</td></tr>
+<tr><td><code>where T : struct</code></td><td>T 必须是值类型</td></tr>
+<tr><td><code>where T : SomeBase</code></td><td>T 必须继承自 SomeBase</td></tr>
+<tr><td><code>where T : IInterface</code></td><td>T 必须实现接口</td></tr>
+<tr><td><code>where T : new()</code></td><td>T 必须有公开无参构造</td></tr>
+<tr><td><code>where T : notnull</code></td><td>T 不可为 null</td></tr>
+</tbody>
+</table>
+
+<h2>Part D · Variance — 表层进入 + 显式 PARK 🅿️</h2>
+
+<h3>知道的部分（表层）</h3>
+<ul>
+  <li><code>out T</code> = <strong>协变 (covariance)</strong>，允许 <code>IProducer&lt;string&gt;</code> 当 <code>IProducer&lt;object&gt;</code> 用。</li>
+  <li><code>in T</code> = <strong>逆变 (contravariance)</strong>，允许 <code>IConsumer&lt;object&gt;</code> 当 <code>IConsumer&lt;string&gt;</code> 用。</li>
+  <li>没标 <code>out</code>/<code>in</code> = <strong>不变 (invariance)</strong>，C# 默认。</li>
+  <li>实验验证过：删 <code>out</code> → exit 1；恢复 <code>out</code> → exit 0 ✅</li>
+</ul>
+
+<h3>Park 的部分</h3>
+<div class="note">
+"为什么 <code>out</code> 就能让协变安全"——这层深度 reasoning 今天没拿下。用户主动喊停"这里暂时放弃，回头重新学"——mentor 即刻 honor。<strong>知道何时该 park，比硬怼一个不明白的概念更重要。</strong>
+</div>
+
+<h3>🔖 回头路（next time start here）</h3>
+<ol>
+  <li><strong>先看 3 个真实接口</strong>：<code>IEnumerable&lt;T&gt;</code>（out）、<code>Action&lt;T&gt;</code>（in）、<code>Func&lt;TIn, TOut&gt;</code>（in + out）。</li>
+  <li><strong>建立"读 vs 写"直觉</strong>：能读出 = out 安全；能写入 = in 安全；既读又写 = 必须不变。</li>
+  <li><strong>画方向箭头</strong>：<code>object ← string</code>（继承）vs <code>IBox&lt;object&gt; ← IBox&lt;string&gt;</code>（替换），看哪些方向 C# 允许。</li>
+  <li><strong>再回来读 out / in 关键字</strong>——这时候它们应该已经"显然"。</li>
+</ol>
+
+<h2>🎯 Day 49 一句话总结</h2>
+<div class="key">
+<strong>"接口 ≠ DI、=&gt; 三身份、new 四语法、required × new() 互斥——今天该懂的小石头全部对位。变性那块大石头先放着，下次从 <code>IEnumerable&lt;T&gt;</code> 进来再撬。"</strong>
+</div>
+
+<p class="meta" style="margin-top: 40px; border-top: 1px solid #d0d7de; padding-top: 16px;">
+— 知道何时该 park，比硬怼一个不明白的概念更重要。 —
+</p>
+
+</body>
+</html>

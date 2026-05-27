@@ -9,7 +9,7 @@
 
 **Original goal**: 0→1 production C# software — deployable, tested, observable, packaged mini-service.
 
-**Status as of today**: ✅ **GOAL ACHIEVED.**
+**Status as of today**: ✅ **GOAL ACHIEVED** (with CI/CD layered on 2026-05-27).
 
 The original 3-Session arc (DI → API → Tests+Docker) is **fully complete**. You now have a `.NET 9` Web API that is:
 - Unit-tested (16 unit tests in `TemperatureSensor.Core.Tests`)
@@ -17,6 +17,7 @@ The original 3-Session arc (DI → API → Tests+Docker) is **fully complete**. 
 - Containerized (multi-stage Docker image, 92.9 MB)
 - Verifiably running (curl.exe round-trips through the container)
 - Cloud-portable (Linux base, same binary runs on Azure / AWS / GCP)
+- **(2026-05-27 addendum)** CI pipeline live — every push to `main` rebuilds, retests, and pushes image to `ghcr.io/marlonj-ms/temperature-sensor:<sha>`. See `2026-05-27/CI-CD-Closeout-Summary.md`.
 
 ---
 

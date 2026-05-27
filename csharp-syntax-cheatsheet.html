@@ -1204,6 +1204,379 @@ curl.exe -i -X POST http://localhost:8080/readings `
 PowerShell 单引号字符串不会展开转义，JSON body 给 <code>curl.exe</code> 要写成 <code>"{\"celsius\":25}"</code>。
 </div>
 
+<div class="danger">
+<strong>30. GitHub Actions：<code>permissions:</code> 没有 step 级</strong>
+<pre><code># ❌ 写在 step 上根本不生效
+steps:
+  - uses: docker/login-action@v3
+    permissions: { packages: write }   # 不会被识别
+
+# ✅ 只能写在 workflow 顶层 或 job 顶层
+jobs:
+  build:
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: docker/login-action@v3</code></pre>
+<code>GITHUB_TOKEN</code> 是 <strong>job-scoped 的短命 token</strong>，默认只读。要写 GHCR / Issues / PR comments 必须在 job 顶层 <code>permissions:</code> 显式 opt-in。<strong>锚句：最小权限原则。</strong>
+</div>
+
+<div class="danger">
+<strong>31. <code>:latest</code> 是生产毒药，CI/CD 永远用具体 tag</strong>
+<pre><code># ❌ 生产 deployment 引用 :latest
+docker pull myapp:latest         # 今天和明天可能是完全不同的二进制，回滚没底
+
+# ✅ 引用具体的 immutable tag（commit sha / version）
+docker pull myapp:dafde3defe1e2d109af8d7fdd06cec813d365b00
+docker pull myapp:v1.2.3</code></pre>
+<code>:latest</code> 只是 floating alias，方便人记。每次 push 它就飘到下一版了，<strong>没法 roll back</strong>。CI/CD 一定要打 immutable tag（<code>${{ github.sha }}</code>）。
+</div>
+
+<div class="danger">
+<strong>32. GHCR 推成功 ≠ 公开可见</strong>
+<pre><code># 工作流跑成功后访问
+GET https://api.github.com/users/&lt;user&gt;/packages/container/&lt;pkg&gt;/versions
+# → 401 Unauthorized
+
+# 不是 push 失败！是 GHCR 包默认 visibility = private
+# 3 种查看方式：
+# 1. UI: https://github.com/&lt;user&gt;?tab=packages
+# 2. 认证 REST: 加 Authorization: Bearer &lt;PAT&gt; header（PAT 要 read:packages scope）
+# 3. docker login ghcr.io 之后 docker pull</code></pre>
+要公开匿名 pull，去 Package settings → Change visibility → Public。
+</div>
+
+<div class="danger">
+<strong>33. <code>${{ github.sha }}</code> 不是 yml 文件的 sha</strong>
+<pre><code># 它是 触发本次 run 的 commit 的 sha
+#   改 yml 文件 push 一次 → 那次 commit 的 sha = github.sha
+#   改源代码 push 一次   → 那次 commit 的 sha 才是新的 github.sha
+
+tags: |
+  ghcr.io/me/app:${{ github.sha }}     # ← 每次 push 镜像都拿到全新的不可变 tag
+  ghcr.io/me/app:latest                # ← 飘移 alias，方便人</code></pre>
+两个 tag 同时打 — 同一个 image id 贴多个名字，不会重新构建。
+</div>
+
+<div class="danger">
+<strong>34. <code>docker/build-push-action</code> 是 build + push 一气呵成</strong>
+<pre><code># ❌ 分两步 — 老办法，慢、没 buildx 加速、tag 处理麻烦
+- run: docker build -t myapp:tag .
+- run: docker push myapp:tag
+
+# ✅ 一站式 action — 内部用 buildx，layer cache + multi-arch 都自带
+- uses: docker/build-push-action@v6
+  with:
+    context: 2026-05-25                             # build context
+    push: ${{ github.event_name == 'push' }}        # PR 不推，只 main 推
+    tags: |
+      ghcr.io/me/app:${{ github.sha }}
+      ghcr.io/me/app:latest</code></pre>
+<strong>context:</strong> 是 daemon 看到的 build context（CI runner 上的子目录）。<strong>CI runner FS ≠ Docker build context</strong> — 别混淆。
+</div>
+
+<div class="danger">
+<strong>35. <code>runtime:9.0</code> 跑不了 web app — 缺 ASP.NET Core 框架</strong>
+<pre><code># ❌ 用最瘦的 runtime 镜像
+FROM mcr.microsoft.com/dotnet/runtime:9.0       # 只有 .NET runtime
+COPY --from=build /app/publish .
+ENTRYPOINT ["dotnet", "MyWebApp.dll"]
+# → 启动立刻失败：
+# It was not possible to find any compatible framework version.
+# The framework 'Microsoft.AspNetCore.App', version '9.0.0' was not found.
+
+# ✅ web app 必须用 aspnet 镜像
+FROM mcr.microsoft.com/dotnet/aspnet:9.0        # runtime + ASP.NET Core 框架</code></pre>
+三层镜像金字塔（包含关系 ⊃）：<code>sdk:9.0</code>（~850MB）⊃ <code>aspnet:9.0</code>（~220MB）⊃ <code>runtime:9.0</code>（~200MB）。<br>
+<strong>checked at startup：</strong>每个 .NET 进程启动时读自己的 <code>*.runtimeconfig.json</code>，里面列出"我需要哪些 shared framework"。少一个就立刻 fail-fast。
+</div>
+
+<div class="danger">
+<strong>36. 容器内部端口 ≠ host 端口 — namespace 隔离</strong>
+<pre><code># 10 个容器都让 Kestrel 听 8080 → 在容器内部完全合法
+docker run -d --name app1 my-image          # 容器内 Kestrel:8080
+docker run -d --name app2 my-image          # 容器内 Kestrel:8080  ← 没冲突！
+# 每个容器有独立 network namespace（独立 lo / eth0 / 端口空间）
+
+# 想从 host 访问？必须给 host 起不同端口
+docker run -p 5000:8080 my-image            # ✅ host:5000 → 容器:8080
+docker run -p 5001:8080 my-image            # ✅ host:5001 → 同一个容器内 8080
+docker run -p 5000:8080 my-image            # ❌ 第二个会失败：host 5000 已占用</code></pre>
+<strong>真实生产场景：</strong>ACA / Kubernetes 里 N 个 replica 都用 8080，反向代理（Envoy / Ingress）维护一张后端 IP 表，按 LB 算法分发到不同 pod。<strong>"扩容时变的是路由表，不是端口号"。</strong>
+</div>
+
+<div class="danger">
+<strong>37. 反向代理 ≠ Kestrel 的替代品 — 它在 Kestrel 前面</strong>
+<pre><code># ❌ 误区："上了 nginx / Envoy / IIS-as-proxy，Kestrel 就不需要了"
+# ❌ 误区："Kestrel 只是测试时的虚拟 IIS"
+
+# ✅ 真实链路 — Kestrel 永远在跑你的 C# 代码
+client → [Front Door (edge)] → [App Gateway / Envoy (regional)] → Kestrel → 你的 endpoint handler
+            ↑ TLS termination     ↑ 负载均衡 + WAF                ↑ 真 web server
+            ↑ 缓存                ↑ 路由
+            ↑ 边缘安全</code></pre>
+<strong>反向代理的 4 个作用：</strong>TLS termination、负载均衡、缓存、边缘安全。<strong>它从不"做菜"，只"接客 + 分桌"</strong>。<br>
+<div class="danger">
+<strong>38. ACA 更新 image / scale-rule 会创建新 revision，不是 in-place 改</strong>
+<pre><code># 你以为是“改了个参数”：
+az containerapp update -n temperature-sensor -g marlondb `
+  --scale-rule-name http --scale-rule-http-concurrency 5
+
+# ACA 实际做的事：
+# 1. 不动旧 revision: temperature-sensor--jx1w89v
+# 2. 创建新 revision:   temperature-sensor--abc123  ← 新参数
+# 3. 切 100% traffic 到新 rev
+# 4. 旧 rev 保留 (retention)→ 秒级回滚兑底
+
+# 查 active revision　1 句话看现在哪个在跑：
+az containerapp revision list -n temperature-sensor -g marlondb `
+  --query "[?properties.active]" -o table</code></pre>
+<strong>锒句：</strong>“Revision 是 immutable。云原生秒级回滚的物理基础就在于——新版本不覆盖旧版本。”你看到的 revision list 多起来不是 bug，是 feature。
+</div>
+
+<div class="danger">
+<strong>39. PowerShell 5.1 没有 <code>ForEach-Object -Parallel</code></strong>
+<pre><code># 你在“pwsh”终端里跱（VS Code 可能起了 Windows PS 5.1）：
+1..30 | ForEach-Object -Parallel { curl.exe https://... }
+
+# 报错：
+# ForEach-Object: Parameter set cannot be resolved using the specified named parameters.
+# One or more parameters issued cannot be used together.
+# → AmbiguousParameterSet（不是 ParameterNotFound，迷惑性强）
+
+# 原因：-Parallel 是 PowerShell 7+ 才有的参数集。5.1 完全没有。
+# 检查版本：
+$PSVersionTable.PSVersion
+# Major  Minor  ...   ← Major=5 是 Windows PS，Major=7 才是 pwsh 新版
+
+# 兼容 5.1 的替代方案：
+Start-ThreadJob -ScriptBlock { curl.exe https://... }     # 线程，同进程
+Start-Process curl.exe -NoNewWindow `                       # 进程，fire-and-forget
+  -ArgumentList "-s","https://..." -RedirectStandardOutput "NUL"</code></pre>
+<strong>锒句：</strong>“<code>-Parallel</code> 是 PS 7+ 专属。Windows 默认装的 powershell.exe 是 5.1，pwsh.exe 才是 7+。别被终端标签骗了。”
+</div>
+
+<div class="danger">
+<strong>40. <code>az containerapp replica list</code> 返空 ≠ 服务挂了</strong>
+<pre><code># 你刚跑了 30 个 curl。返空的 4 个原因：
+# 1. autoscaler 已缩回（scale-out window 30-60s、cooldown 5min）
+#    → 30 curl 串行 5 秒跑完，根本没堆到阈值就被缩了
+# 2. revision 名过期（被 update 替换）
+#    → --revision 传了旧名字
+# 3. min=0，零流量期间的冷启动间隔
+# 4. 真挂了（ImagePullBackOff、CrashLoopBackOff、ENV 错误等）
+
+# 正确的排查顺序：
+az containerapp revision list -n temperature-sensor -g marlondb `
+  --query "[?properties.active]" -o table             # ← 先看哪个 rev 是 active
+
+az containerapp replica list -n temperature-sensor -g marlondb `
+  --revision &lt;active-rev-name&gt; -o table              # ← 用 active 名字查
+
+az containerapp logs show -n temperature-sensor -g marlondb `
+  --type console --tail 50                            # ← 看代码是不是炸了</code></pre>
+<div class="danger">
+<strong>41. 自动化 ≠ 脚本化 — 双击 deploy.ps1 不是自动化</strong>
+<pre><code># 脚本化（scripting）——多步合一步，要人按：
+C:\&gt; .\deploy.ps1                            # 你双击 / 你敲这句
+C:\&gt; Ctrl+B 跑 dotnet build                  # 你按快捷键
+
+# 自动化（automation）——触发器是机器产生的事件：
+on:
+  push: { branches: [main] }                  # ✅ git push 这个事件 —— GitHub server 检测
+  schedule:
+    - cron: '0 2 * * *'                       # ✅ cron 表达式 —— OS scheduler 打
+
+# 判断标准：
+# "触发器是你还是机器？" —— 你 = 脚本化，机器 = 自动化。</code></pre>
+<strong>锒句：</strong>脚本是自动化的<strong>前提条件</strong>（你得先脱手手敲），但<strong>本身不是自动化</strong>。别把“deploy.ps1 写好了”当“CI/CD 完成了”。
+</div>
+
+<div class="danger">
+<strong>42. “Pipeline 被触发” ≠ “az login 成功” — 两层不同的决策权</strong>
+<pre><code># PR 场景实际发生的事（常被误解）：
+# 1. PR 开 → GitHub 检测到 PR 事件 → workflow 启动 ✅
+# 2. runner 跑到 - uses: azure/login@v2
+# 3. GitHub 发的 OIDC token 里 sub = "repo:.../pull_request"
+# 4. Azure 查 federated credential 名单 → 没这条
+# 5. 报错：AADSTS70021 No matching federated identity record found
+# 6. azure/login 这一步红 ❌
+
+# 谁说了算？两层不同：
+#   pipeline 触发 → GitHub server 决定（看 yml 的 on:）
+#   az login 成功 → Azure AD 决定（看 OIDC token 的 sub）</code></pre>
+<strong>锒句：</strong>“被触发 ≠ 被授权。”能跑 workflow 不代表能拿 Azure token。PR 能跑测试但拿不到 prod 凭据，是 feature。
+</div>
+
+<div class="danger">
+<strong>43. Required status check 别选 deploy job — Skipped 会卡住 PR merge</strong>
+<pre><code># GitHub Actions 的 job 状态三种：
+Success  ✅   → 算 workflow 通过
+Skipped  ⏭️   → 算 workflow 通过（视同 success）
+Failed   ❌   → 算 workflow 失败
+
+# 但是“分支保护 Required check”的逻辑不一样：
+#   Skipped 被看作 missing → "Waiting for status to be reported" → merge 按钮灰掉
+
+# ❌ 错误设置：
+Required: build-and-push   ✅ 合理
+         deploy-to-aca    ⚠️ PR 时 Skipped → PR 永远 merge 不了
+
+# ✅ 正确设置：Required 只给 "PR 时一定会跑的 job"
+Required: build-and-push   ✅ PR 时 success
+         deploy-to-aca    ⬜ 不选（反正只在 main push 后跑）</code></pre>
+<strong>锒句：</strong>“Required 只给 PR 时一定会跑的 job（test / build）。deploy 类 job 本来就是 push 后才跑的，设为 Required = 自己振自己脚。”
+</div>
+
+<!-- ============================================================ -->
+<!-- Day 49 · Generics Session 1 — 基础重建坑 44–53 -->
+<!-- ============================================================ -->
+
+<div class="danger">
+<strong>44. 接口 ≠ DI — 看到 <code>interface</code> 别立刻喊 DI</strong>
+<pre><code>public interface IAuditable { DateTime CreatedAt { get; } }
+
+public class Repository&lt;T&gt; where T : class, IAuditable   // ← 这里只是泛型约束
+{
+    public void Add(T item) { /* ... */ }
+}
+// ❌ "看到 interface 就以为在用 DI"
+// ✅ DI 的关键标志是 IServiceCollection / AddSingleton / 构造函数注入
+// ✅ 这个文件没那些 → 和 DI 一点关系都没有</code></pre>
+<strong>锚句：</strong>接口 = C# 语言契约；DI = 设计模式 + 容器框架。<strong>DI 必用接口，但反之不成立。</strong>
+</div>
+
+<div class="danger">
+<strong>45. <code>=&gt;</code> 三身份 — 位置决定身份，别立刻当 lambda</strong>
+<pre><code>// (1) Lambda — 输入到输出
+list.Where(x =&gt; x &gt; 0)
+
+// (2) 表达式属性体 (expression-bodied property) — 简写 getter
+public int Count =&gt; _items.Count;
+
+// (3) 表达式方法体 — 简写单返回式方法
+public override string ToString() =&gt; $"Order(Id={Id})";</code></pre>
+<strong>锚句：</strong>"<code>=&gt;</code> 长得一样但身份三种。<strong>看它前面是什么</strong>：参数列表→lambda；属性签名→属性体；方法签名→方法体。"
+</div>
+
+<div class="danger">
+<strong>46. <code>new</code> 的 4 种语法 — () 何时可省</strong>
+<pre><code>new Order() { Id = "A-100", Amount = 88.8m }     // (1) 完整：ctor + 初始化器
+new Order   { Id = "A-100", Amount = 88.8m }     // (2) 省略空括号（仅无参构造时）
+Order o = new() { Id = "A-100", Amount = 88.8m } // (3) target-typed (C# 9+)
+var list = new List&lt;int&gt; { 1, 2, 3 };            // (4) 集合初始化器</code></pre>
+<strong>锚句：</strong>(2) 不是"括号被吞了"，而是 C# 允许在 <code>{ }</code> 跟随时省略<strong>无参</strong>括号。背后依然走 ctor + 属性赋值。
+</div>
+
+<div class="danger">
+<strong>47. <code>required</code> × 默认值 — 默认永远不会赢</strong>
+<pre><code>public required string Id { get; init; } = "DEFAULT";
+//          ↑ 编译期门卫              ↑ 运行期默认值
+
+new Order { /* Id 没传 */ }   // ❌ CS9035 — 编译失败
+new Order { Id = "ABC" }      // ✅ 必须显式传
+
+// 即使写了 = "DEFAULT"，调用方仍必须显式赋值
+// 因为 required 在编译期就拦下了，根本走不到运行期的默认值</code></pre>
+<strong>锚句：</strong><code>required</code> = 编译期门卫；默认值 = 运行期值。<strong>编译失败永远走不到运行期。</strong>
+</div>
+
+<div class="danger">
+<strong>48. <code>new()</code> 约束是关于"方法体"，不是关于 T 本身</strong>
+<pre><code>// ❌ 没 new() 约束，方法体内不能 new T()
+public class Repo&lt;T&gt; where T : class
+{
+    public T CreateDefault() =&gt; new T();   // ❌ 编译错
+}
+
+// ✅ 加上 new() 约束才能 new T()
+public class Repo&lt;T&gt; where T : class, new()
+{
+    public T CreateDefault() =&gt; new T();   // ✅
+}</code></pre>
+<strong>锚句：</strong><code>new()</code> 约束<strong>存在的全部理由</strong>就是让你能在泛型代码里 <code>new T()</code>。没这个需求就不要加。
+</div>
+
+<div class="danger">
+<strong>49. CS9040 — <code>required</code> 和 <code>new()</code> 互斥</strong>
+<pre><code>public class Order : IAuditable
+{
+    public required string Id { get; init; }   // ← required 强制传值
+}
+
+public class Repository&lt;T&gt; where T : class, IAuditable, new()
+{
+    public T CreateDefault() =&gt; new T();   // ❌ CS9040
+    //  T = Order，Order 有 required 成员 → 不能无参 new
+}</code></pre>
+<strong>锚句：</strong><code>required</code> 把"必须传值"写进类型签名；<code>new()</code> 承诺"我能无参构造"。<strong>两个承诺直接打架，编译器替你提前发现。</strong>
+</div>
+
+<div class="danger">
+<strong>50. 工厂方法 (factory method) — generic 代码里非常常见</strong>
+<pre><code>// Dictionary.GetOrAdd 经典签名
+public TValue GetOrAdd(TKey key, Func&lt;TKey, TValue&gt; valueFactory);
+//                                ──────────────────────────────
+//                                把"怎么造 V"作为参数传进来
+
+// EF Core
+DbContextOptions.UseSqlServer(connectionString);   // 内部用 factory delegate 延迟构造
+
+// 你今天看到的简化版（被 CS9040 挡住而注释掉的）
+public T CreateDefault() =&gt; new T();   // ← "我自己也能造 T" 的工厂能力</code></pre>
+<strong>锚句：</strong>工厂方法回答"<strong>谁来 new、什么时候 new</strong>"。在 generic + DI 场景里频繁出现。
+</div>
+
+<div class="danger">
+<strong>51. 泛型类型替换发生在编译期 — 不是运行期 cast</strong>
+<pre><code>public class Repository&lt;T&gt; where T : class, IAuditable
+{
+    public void Add(T item) { _items.Add(item); }
+}
+
+var repo = new Repository&lt;Order&gt;();   // ← 编译期：T 被换成 Order
+repo.Add(new Order { Id = "A-100", Amount = 88.8m });
+
+// 编译产物里根本不存在 "T"，只有 "Order"
+// 它不是 (Order)item 那种运行期类型转换</code></pre>
+<strong>锚句：</strong><code>Repository&lt;T&gt;</code> → <code>Repository&lt;Order&gt;</code> 是<strong>编译期类型实参替换</strong>，不是运行期 cast。
+</div>
+
+<div class="danger">
+<strong>52. 变性默认是不变 (invariance) — <code>string : object</code> ≠ <code>IBox&lt;string&gt; : IBox&lt;object&gt;</code></strong>
+<pre><code>// 直觉：string 是 object 的子类型
+object o = "hello";       // ✅ OK
+
+// 但是泛型默认<strong>不变</strong>
+IBox&lt;string&gt; sBox = ...;
+IBox&lt;object&gt; oBox = sBox;   // ❌ 编译错（默认 invariance）
+
+// 想让它行，要显式 opt-in：
+public interface IBox&lt;out T&gt; { T Read(); }   // ← 协变
+IBox&lt;object&gt; oBox = sBox;                   // ✅ OK</code></pre>
+<strong>锚句：</strong>"<code>string : object</code> 是<strong>继承</strong>关系，不会自动延伸到<strong>类型实参替换</strong>关系。要开通这个延伸，必须显式标 <code>out</code> 或 <code>in</code>。"
+</div>
+
+<div class="danger">
+<strong>53. <code>out T</code> / <code>in T</code> — 表层意义先记住，深层之后再啃</strong>
+<pre><code>public interface IProducer&lt;out T&gt;   // out = T 只能"出去"（作返回值）
+{
+    T Produce();          // ✅
+    // void Take(T x);    // ❌ 不能作参数
+}
+
+public interface IConsumer&lt;in T&gt;    // in = T 只能"进来"（作参数）
+{
+    void Consume(T value);    // ✅
+    // T Produce();           // ❌ 不能作返回值
+}
+
+// 协变：IProducer&lt;string&gt; 可当 IProducer&lt;object&gt; 用
+// 逆变：IConsumer&lt;object&gt; 可当 IConsumer&lt;string&gt; 用</code></pre>
+<strong>锚句：</strong>变性深层 reasoning 很多人都卡过——<strong>park 它不丢人</strong>。下次重启：<code>IEnumerable&lt;T&gt;</code> / <code>Action&lt;T&gt;</code> / <code>Func&lt;TIn, TOut&gt;</code> 三个真实接口当切入点，从"读 vs 写"直觉先入手。
+</div>
+
 <a class="back-top" href="#">↑ 回到顶部</a>
 
 <!-- ============================================================ -->
