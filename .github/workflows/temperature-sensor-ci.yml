@@ -10,6 +10,12 @@ jobs:
   build-test-and-image:
     runs-on: ubuntu-latest
 
+    # GITHUB_TOKEN is scoped per-job. Default is read-only on contents.
+    # We need packages:write to push images to GHCR.
+    permissions:
+      contents: read
+      packages: write
+
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -31,5 +37,20 @@ jobs:
       - name: Run API integration tests
         run: dotnet test 2026-05-26/TemperatureSensor.Api.Tests/TemperatureSensor.Api.Tests.csproj --configuration Release
 
-      - name: Build Docker image
-        run: docker build -t temperature-sensor:ci 2026-05-25
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push image
+        uses: docker/build-push-action@v6
+        with:
+          context: 2026-05-25
+          # Always build (so PRs validate the Dockerfile),
+          # but only push on a real push to main (not on PRs).
+          push: ${{ github.event_name == 'push' }}
+          tags: |
+            ghcr.io/marlonj-ms/temperature-sensor:${{ github.sha }}
+            ghcr.io/marlonj-ms/temperature-sensor:latest
