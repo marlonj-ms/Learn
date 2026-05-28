@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>2026-05-28 · 嵌套泛型阅读流利度 🧠</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; max-width: 860px; margin: 40px auto; padding: 0 24px 80px; line-height: 1.75; color: #1f2328; background: #fbfbfb; }
+  h1 { border-bottom: 3px solid #8250df; padding-bottom: 8px; color: #8250df; }
+  h2 { border-left: 4px solid #8250df; padding-left: 10px; margin-top: 34px; color: #1f2328; font-size: 1.3em; }
+  h3 { color: #8250df; margin-top: 22px; font-size: 1.08em; }
+  code { background: #eef2f6; padding: 2px 6px; border-radius: 4px; font-family: "Consolas", monospace; font-size: 0.94em; color: #cf222e; }
+  pre { background: #1f2328; color: #e6edf3; padding: 12px 16px; border-radius: 8px; overflow-x: auto; font-size: 0.86em; }
+  pre code { background: none; color: inherit; padding: 0; }
+  .key { background: #f5edff; border-left: 4px solid #8250df; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .note { background: #fff8c5; border-left: 4px solid #d4a72c; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .danger { background: #ffebe9; border-left: 4px solid #cf222e; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .ok-box { background: #dafbe1; border-left: 4px solid #1a7f37; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  a { color: #0969da; text-decoration: none; } a:hover { text-decoration: underline; }
+  .back { font-size: 0.9em; color: #57606a; margin-bottom: 16px; }
+  .meta { color: #57606a; font-size: 0.9em; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 0.95em; }
+  th, td { border: 1px solid #d0d7de; padding: 6px 10px; text-align: left; vertical-align: top; }
+  th { background: #f6f8fa; }
+</style>
+</head>
+<body>
+
+<div class="back"><a href="../dailyread.html">返回首页</a></div>
+
+<h1>嵌套泛型阅读流利度 🧠</h1>
+<p class="meta">2026-05-28 · 6 级阶梯 · 配套：<a href="../2026-05-28/Nested-Generics-Summary.md">完整 Summary</a> · <a href="../2026-05-28/Nested-Generics-Fluency.cs">可跑 demo</a></p>
+
+<div class="ok-box">
+<strong>一句话：</strong>从 <code>List&lt;int&gt;</code> 一路爬到 <code>Func&lt;Dictionary&lt;string,List&lt;int&gt;&gt;, List&lt;string&gt;&gt;</code>，6 级阶梯一气通关。最大收益是口诀 <strong>#43 ——读 <code>Func&lt;...&gt;</code> 时目光直接弹到最后一个泛型参数 = 返回类型</strong>，前面全是噪音。这一条单独就抵 LINQ 半本书。
+</div>
+
+<h2>6 级阶梯地图</h2>
+
+<table>
+<thead><tr><th>级别</th><th>签名</th><th>关键点</th></tr></thead>
+<tbody>
+<tr><td>L1</td><td><code>List&lt;int&gt;</code></td><td>3 种初始化语法等价；空 List ≠ null</td></tr>
+<tr><td>L2</td><td><code>List&lt;T&gt;</code></td><td>开放泛型 vs 封闭泛型；T 没替换前不能 new</td></tr>
+<tr><td>L3</td><td><code>List&lt;List&lt;int&gt;&gt;</code> / <code>Dictionary&lt;string,int&gt;</code></td><td>锯齿 vs 矩形；<code>[]</code> 两种语义（index vs key）</td></tr>
+<tr><td>L4</td><td><code>List&lt;List&lt;List&lt;int&gt;&gt;&gt;</code></td><td>剥洋葱模式不变，只是多剥一层</td></tr>
+<tr><td>L5</td><td><code>Dictionary&lt;string, List&lt;Order&gt;&gt;</code></td><td>业务签名 + 链式取值类型追踪</td></tr>
+<tr><td>L6</td><td><code>Func&lt;Dictionary&lt;string,List&lt;int&gt;&gt;, List&lt;string&gt;&gt;</code></td><td>delegate 包嵌套泛型；最后一参数 = 返回类型</td></tr>
+</tbody>
+</table>
+
+<h2>核心心法 — 剥洋葱解码法（3 步）</h2>
+
+<h3>Step 1 — 找最外层</h3>
+<p>看最左的类型名 + 它紧跟的 <code>&lt;...&gt;</code>，这就是最外面的盒子。</p>
+
+<h3>Step 2 — 数 <code>&lt;</code> <code>&gt;</code> 配对深度，切顶层逗号</h3>
+<p>只有<strong>深度为 0</strong> 时遇到的逗号才属于最外层，嵌套类型自己的逗号要忽略。</p>
+
+<pre><code>Func&lt;Dictionary&lt;string, List&lt;int&gt;&gt;, List&lt;string&gt;&gt;
+     ^                            ^               ^
+     深度 1                       深度 0          深度 0
+                                  ↑ Func 的分界    Func 收尾</code></pre>
+
+<h3>Step 3 — 每层翻译成业务白话</h3>
+<ul>
+<li><code>Dictionary&lt;string, List&lt;int&gt;&gt;</code> → "按 string（如学生名）查 List&lt;int&gt;（这个学生的分数列表）"</li>
+<li><code>List&lt;string&gt;</code> → "字符串列表（如学霸名单）"</li>
+<li>串起来：<strong>"喂一张分数总表，吐一张学霸名单"</strong></li>
+</ul>
+
+<h2>口诀 — 12 个新条目（编号续 Day 49 的 #31）</h2>
+
+<table>
+<thead><tr><th>#</th><th>口诀</th></tr></thead>
+<tbody>
+<tr><td>32</td><td>空 List ≠ null —— 用 <code>Count == 0</code> 判空</td></tr>
+<tr><td>33</td><td>"传 null 安全，对 null 调方法才炸" —— 整个 NRE 家族一句话</td></tr>
+<tr><td>34</td><td><code>?.</code> 空条件运算符短路 —— 链中任一段 null 整条 null</td></tr>
+<tr><td>35</td><td><code>int?</code> 是类型修饰；<code>?.</code> 是操作修饰</td></tr>
+<tr><td>36</td><td>目标类型 <code>new()</code> 跟着左侧期望类型走（C# 9+）</td></tr>
+<tr><td>37</td><td><code>List&lt;List&lt;T&gt;&gt;</code> ≠ <code>T[,]</code> —— 锯齿 vs 矩形</td></tr>
+<tr><td>38</td><td>0-indexed：最后一个是 <code>Count - 1</code></td></tr>
+<tr><td>39</td><td><code>list[^N]</code> ≡ <code>list[Count - N]</code></td></tr>
+<tr><td>40</td><td>Dictionary 取值用 <code>TryGetValue</code></td></tr>
+<tr><td>41</td><td><code>Dictionary&lt;string, ...&gt;</code> 默认大小写敏感</td></tr>
+<tr><td>42</td><td>decimal 字面量必须带 <code>m</code> 后缀</td></tr>
+<tr><td>43</td><td>读 <code>Func&lt;...&gt;</code>：目光直接弹到最后一个泛型参数 = 返回类型</td></tr>
+</tbody>
+</table>
+
+<h2>关键代码片段</h2>
+
+<h3>1. 3 种 List 初始化语法（等价）</h3>
+<pre><code>var a = new List&lt;int&gt;() { 10, 20, 30 };   // 完整
+var b = new List&lt;int&gt;  { 10, 20, 30 };    // 省略空括号
+List&lt;int&gt; c = new()    { 10, 20, 30 };    // 目标类型 new() (C# 9+)</code></pre>
+
+<h3>2. Dictionary 安全取值</h3>
+<pre><code>// ❌ 缺 key 抛 KeyNotFoundException
+var x = dict["maybe-missing"];
+
+// ✅ TryGetValue
+if (dict.TryGetValue("k", out var v)) Console.WriteLine(v);
+
+// ✅ 忽略大小写
+var safe = new Dictionary&lt;string, int&gt;(StringComparer.OrdinalIgnoreCase);</code></pre>
+
+<h3>3. 链式取值类型追踪</h3>
+<pre><code>Dictionary&lt;string, List&lt;Order&gt;&gt; ordersByCustomer = ...;
+
+ordersByCustomer            // Dictionary&lt;string, List&lt;Order&gt;&gt;
+ordersByCustomer["alice"]   // List&lt;Order&gt;
+ordersByCustomer["alice"][0] // Order
+ordersByCustomer["alice"][0].Total // decimal
+
+// 左边变量类型 = 链式最后一步的类型
+decimal firstTotal = ordersByCustomer["alice"][0].Total;</code></pre>
+
+<h3>4. Func 解码法</h3>
+<pre><code>Func&lt;A, B, C&gt; f;
+//   ^^ ^   ^
+//   输入   返回（最后永远是返回）
+
+Func&lt;List&lt;Order&gt;, Dictionary&lt;string, decimal&gt;&gt; summarize;
+//   ^─ 输入 ─^  ^──────── 返回 ──────────^</code></pre>
+
+<h2>反复踩的坑（追加到 cheatsheet 54–62）</h2>
+
+<div class="danger"><strong>坑 54：</strong>把空 List 当 null —— <code>list == null</code> 永远 False，要用 <code>list.Count == 0</code></div>
+
+<div class="danger"><strong>坑 55：</strong><code>?.</code> 短路 —— 链中任一段 null，后面全跳过返回 null</div>
+
+<div class="danger"><strong>坑 56：</strong><code>List&lt;List&lt;T&gt;&gt;</code> 和 <code>T[,]</code> 混用 —— 不规则走锯齿；固定矩形（棋盘 / 图像）走 <code>T[,]</code></div>
+
+<div class="danger"><strong>坑 57：</strong>嵌套下标越界：写 <code>m[Count][Count]</code> —— 改 <code>m[^1][^1]</code> 或 <code>m[Count-1][Count-1]</code></div>
+
+<div class="danger"><strong>坑 58：</strong><code>dict["missingKey"]</code> 抛 <code>KeyNotFoundException</code> —— 用 <code>TryGetValue</code></div>
+
+<div class="danger"><strong>坑 59：</strong><code>dict["Alice"]</code> ≠ <code>dict["alice"]</code> —— 默认 case-sensitive，要忽略传 <code>StringComparer.OrdinalIgnoreCase</code></div>
+
+<div class="danger"><strong>坑 60：</strong><code>decimal d = 1000.0;</code> 编译错 —— double 字面量赋 decimal；加后缀 <code>m</code>：<code>decimal d = 1000.0m;</code></div>
+
+<div class="danger"><strong>坑 61：</strong>读 <code>Func&lt;...&gt;</code> 时眼睛跑去看"中间最显眼的东西"忘了找返回类型 —— 第一眼直接定位最后一个 <code>,</code> 后面那块</div>
+
+<div class="danger"><strong>坑 62：</strong>嵌套泛型逗号有两种身份 —— 数 <code>&lt;</code> <code>&gt;</code> 配对深度 = 0 时的逗号才属于外层</div>
+
+<h2>🅿️ 仍然 PARK</h2>
+<ul>
+<li><strong>Variance 深层 reasoning</strong> —— Day 49 显式 park；Day 51 候选 B</li>
+<li><strong>IL 检视</strong> —— Day 47 装好工具，留到泛型 / records 时回看 codegen</li>
+</ul>
+
+<h2>🪜 Day 51 候选</h2>
+<ul>
+<li><strong>A — LINQ 链式流利度 🌟（推荐）</strong>：吃今天的嵌套泛型红利；LINQ 链返回的就是 <code>IEnumerable&lt;IGrouping&lt;K,V&gt;&gt;</code> 这种深嵌套</li>
+<li><strong>B — Variance 回头路</strong>：从 <code>IEnumerable&lt;T&gt;</code> / <code>Action&lt;T&gt;</code> / <code>Func&lt;TIn,TOut&gt;</code> 反推 <code>out</code> / <code>in</code> 为什么安全</li>
+<li><strong>C — Records + Pattern Matching</strong>：现代 C# 必备 2 大语法糖</li>
+</ul>
+
+<div class="key">
+<strong>建议默认 A（LINQ）</strong>。让用户选 / 否决 / 给完全不同的方向。
+</div>
+
+</body>
+</html>
