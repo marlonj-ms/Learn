@@ -96,10 +96,15 @@
 
 <h1>C# Daily Read</h1>
 <p class="subtitle">每日学习复习首页 — 每个子页面 5 分钟内读完</p>
-<a class="card today" href="dailyread/dailyread-2026-05-29.html">
-  <div class="date">2026-05-29 · 今天 <span class="tag">最新</span></div>
-  <div class="title">LINQ 链式流利度 🔗 — Where / Select / GroupBy / OrderBy / ToList</div>
-  <div class="desc">Part 1 延迟执行（配方 vs 数据 ☎️ 预测全中）· Part 2 <code>Select</code> 换形状 vs <code>Where</code> 减个数 · Part 3 <code>GroupBy</code> 双层嵌套 <code>IEnumerable&lt;IGrouping&lt;TKey,T&gt;&gt;</code> · <code>OrderBy</code> 升级成 <code>IOrderedEnumerable&lt;&gt;</code> 才能链 <code>ThenBy</code> · 8 个新口诀 #44–51 + 意外口诀 #52（入口点 CS7022 冲突 —— 顶级语句静默吃掉 Main）· 毕业题 Top Customer = Bob ¥750 / 2 单 🥇 (20.5/21) · 现代 C# 三件套 record / target-typed new / collection expr <code>[...]</code> · 追加坑 63–67：多次枚举 · Where≠List · var 配不上 <code>[...]</code> · GroupBy 顺序不承诺 · 入口点 CS7022 · Day 52 候选 A=Join+SelectMany B=Records+Pattern C=Variance</div>
+<a class="card today" href="dailyread/dailyread-2026-05-29-day52.html">
+  <div class="date">2026-05-29 (PM) · 今天 <span class="tag">最新</span></div>
+  <div class="title">Day 52 · Join + SelectMany + Yield/State Machine + IQueryable 🔘 — Tier-1 LINQ 14 个收官</div>
+  <div class="desc">Part 1 <code>Join</code> 5 args / 4 generics / hash join O(N+M) · Part 2 <code>SelectMany</code> 1-arg 拍扁 + 2-arg 父子展开 · Part 3 🪤 CS0579 同目录两个 csproj → SDK 把所有 <code>.cs</code> include 进每个项目 → 修复 = 一 demo 一文件夹 · Part 4 <code>yield return</code> 真相 = 编译器生成 <code>&lt;Demo&gt;d__0</code> 状态机（<code>MoveNext</code>+<code>_state</code> switch，局部变量提升为字段）· Part 5 谁是按按钮的人 🔘 — <code>foreach</code>/<code>ToList</code>/<code>Count</code>/<code>First</code> 按按钮；<code>Where</code>/<code>Select</code>/<code>Join</code> 只再套一层状态机 · Part 6 <code>IQueryable</code> vs <code>IEnumerable</code> —— 同 lambda 两个世界（<code>Func</code> vs <code>Expression Tree</code>，本地过滤 vs DB 翻译 SQL）· 左边静态类型决定走 <code>Enumerable.Where</code> 还是 <code>Queryable.Where</code> · 💣 凶手 <code>.ToList()</code> 在 <code>.Where()</code> 之前拉 10M 行 · 🪤 Repository 返 <code>IEnumerable&lt;T&gt;</code> 砍下游 SQL 能力 · DbContext / DbSet 入门 · 6 个新口诀 #68–73 + cheatsheet 坑 68–73 · Tier-1 LINQ 14 个收官 ✅</div>
+</a>
+<a class="card" href="dailyread/dailyread-2026-05-29.html">
+  <div class="date">2026-05-29 (AM)</div>
+  <div class="title">Day 51 · LINQ 链式流利度 🔗 — Where / Select / GroupBy / OrderBy / ToList</div>
+  <div class="desc">Part 1 延迟执行（配方 vs 数据 ☎️ 预测全中）· Part 2 <code>Select</code> 换形状 vs <code>Where</code> 减个数 · Part 3 <code>GroupBy</code> 双层嵌套 <code>IEnumerable&lt;IGrouping&lt;TKey,T&gt;&gt;</code> · <code>OrderBy</code> 升级成 <code>IOrderedEnumerable&lt;&gt;</code> 才能链 <code>ThenBy</code> · 8 个新口诀 #44–51 + 意外口诀 #52（入口点 CS7022 冲突 —— 顶级语句静默吃掉 Main）· 毕业题 Top Customer = Bob ¥750 / 2 单 🥇 (20.5/21) · 现代 C# 三件套 record / target-typed new / collection expr <code>[...]</code> · 追加坑 63–67：多次枚举 · Where≠List · var 配不上 <code>[...]</code> · GroupBy 顺序不承诺 · 入口点 CS7022</div>
 </a>
 <a class="card" href="dailyread/dailyread-2026-05-28.html">
   <div class="date">2026-05-28</div>

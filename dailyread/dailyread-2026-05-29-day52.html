@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>2026-05-29 (PM) · Join + SelectMany + Yield + IQueryable 🔘</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; max-width: 880px; margin: 40px auto; padding: 0 24px 80px; line-height: 1.75; color: #1f2328; background: #fbfbfb; }
+  h1 { border-bottom: 3px solid #8250df; padding-bottom: 8px; color: #8250df; }
+  h2 { border-left: 4px solid #8250df; padding-left: 10px; margin-top: 34px; color: #1f2328; font-size: 1.3em; }
+  h3 { color: #8250df; margin-top: 22px; font-size: 1.08em; }
+  code { background: #eef2f6; padding: 2px 6px; border-radius: 4px; font-family: "Consolas", monospace; font-size: 0.94em; color: #cf222e; }
+  pre { background: #1f2328; color: #e6edf3; padding: 12px 16px; border-radius: 8px; overflow-x: auto; font-size: 0.86em; }
+  pre code { background: none; color: inherit; padding: 0; }
+  .key { background: #f3e8ff; border-left: 4px solid #8250df; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .note { background: #fff8c5; border-left: 4px solid #d4a72c; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .danger { background: #ffebe9; border-left: 4px solid #cf222e; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .ok-box { background: #dafbe1; border-left: 4px solid #1a7f37; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  a { color: #0969da; text-decoration: none; } a:hover { text-decoration: underline; }
+  .back { font-size: 0.9em; color: #57606a; margin-bottom: 16px; }
+  .meta { color: #57606a; font-size: 0.9em; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 0.95em; }
+  th, td { border: 1px solid #d0d7de; padding: 6px 10px; text-align: left; vertical-align: top; }
+  th { background: #f6f8fa; }
+</style>
+</head>
+<body>
+
+<div class="back"><a href="../dailyread.html">返回首页</a></div>
+
+<h1>Join + SelectMany + Yield + IQueryable 🔘</h1>
+<p class="meta">2026-05-29 (PM · Day 52) · Tier-1 LINQ 14 个收官 · 配套：<a href="../2026-05-29/Day52-Join-SelectMany-Yield-StateMachine-IQueryable-Summary.md">完整 Summary</a> · <a href="../2026-05-29/Day52-Join-Demo/Day52-Join-Demo.cs">Join demo</a> · <a href="../2026-05-29/Day52-SelectMany-Demo/Day52-SelectMany-Demo.cs">SelectMany demo</a></p>
+
+<div class="ok-box">
+<strong>一句话：</strong>「LINQ 的真相不是『方法』，是『方法构造一个<strong>状态机 / Expression Tree</strong>，<strong>有人按按钮才跑</strong>』。<code>Join</code> 配 hash 表 O(N+M)，<code>SelectMany</code> 拍扁嵌套；但所有链子背后是同一条线 —— 谁按按钮决定<strong>何时执行</strong>，<strong>左边静态类型</strong>决定走 <code>Enumerable.Where</code> 还是 <code>Queryable.Where</code>，<strong>返回类型</strong>决定下游能不能继续推 SQL。」
+</div>
+
+<h2>Part 1 · Join — 5 args / 4 generics / hash join O(N+M)</h2>
+
+<pre><code>customers.Join(
+    orders,
+    c =&gt; c.Id,                                  // 左键
+    o =&gt; o.CustomerId,                          // 右键
+    (c, o) =&gt; new { c.Name, o.OrderId, o.Amount });
+// = SQL INNER JOIN，键不匹配两边都丢</code></pre>
+
+<ul>
+  <li>4 个泛型：<code>TOuter</code> / <code>TInner</code> / <code>TKey</code> / <code>TResult</code></li>
+  <li>内表先 hash 进字典，外表再扫一遍按键查 → O(N+M)</li>
+</ul>
+
+<h2>Part 2 · SelectMany — 拍扁 + 父子展开</h2>
+
+<table>
+<thead><tr><th>形态</th><th>用途</th></tr></thead>
+<tbody>
+<tr><td><code>.SelectMany(arr =&gt; arr)</code></td><td>1-arg：纯拍扁 <code>[[1,2],[3]] → [1,2,3]</code></td></tr>
+<tr><td><code>.SelectMany(u =&gt; u.Roles, (u, r) =&gt; new { u.Name, Role = r })</code></td><td>2-arg：父子展开成扁平表（ORM 一对多神器）</td></tr>
+</tbody>
+</table>
+
+<h2>Part 3 · 🪤 CS0579 — 同目录两个 csproj</h2>
+
+<div class="danger">
+SDK 默认行为：<strong>当前目录所有 <code>*.cs</code> 都自动 include</strong>。两个 csproj 同目录 → 两份 <code>.cs</code> 都被 include 两遍 → 两次顶级语句 + 两套 assembly 属性 → <code>CS0579: Duplicate Attribute</code>。
+<br><br>
+<strong>修复：每个 demo 各自一个子文件夹</strong>（口诀 #68）
+</div>
+
+<h2>Part 4 · yield + 状态机 —— LINQ 的真正引擎</h2>
+
+<pre><code>static IEnumerable&lt;int&gt; Demo()
+{
+    Console.WriteLine("A");
+    yield return 1;
+    Console.WriteLine("B");
+    yield return 2;
+}
+
+// 编译器实际生成：
+private sealed class &lt;Demo&gt;d__0 : IEnumerable&lt;int&gt;, IEnumerator&lt;int&gt;
+{
+    private int _state;
+    public bool MoveNext()       // ← 真正的"按按钮"入口
+    {
+        switch (_state)
+        {
+            case 0: Console.WriteLine("A"); _current = 1; _state = 1; return true;
+            case 1: Console.WriteLine("B"); _current = 2; _state = 2; return true;
+            case 2: return false;
+        }
+    }
+}</code></pre>
+
+<div class="key">
+<strong>口诀 #70：</strong><code>var seq = Demo();</code> 只搭管子，<strong>body 一行都不跑</strong>。<code>foreach</code> / <code>ToList</code> 才把水放进管子。
+</div>
+
+<h2>Part 5 · 谁是按按钮的人 🔘</h2>
+
+<table>
+<thead><tr><th>按按钮？</th><th>操作</th></tr></thead>
+<tbody>
+<tr><td>✅</td><td><code>foreach</code>, <code>ToList</code>, <code>ToArray</code>, <code>ToDictionary</code>, <code>Count</code>, <code>First</code>, <code>Single</code>, <code>Any</code>, <code>All</code>, <code>Sum</code>, <code>Max</code>, <code>string.Join</code>, <code>await foreach</code></td></tr>
+<tr><td>❌</td><td><code>Where</code>, <code>Select</code>, <code>SelectMany</code>, <code>Join</code>, <code>OrderBy</code>, <code>GroupBy</code>, <code>Take</code>, <code>Skip</code> —— 只是再套一层状态机</td></tr>
+</tbody>
+</table>
+
+<h2>Part 6 · IQueryable vs IEnumerable —— 同 lambda，两个世界</h2>
+
+<table>
+<thead><tr><th>维度</th><th><code>IEnumerable&lt;T&gt;</code></th><th><code>IQueryable&lt;T&gt;</code></th></tr></thead>
+<tbody>
+<tr><td>lambda 编译成</td><td><code>Func&lt;T,bool&gt;</code></td><td><code>Expression&lt;Func&lt;T,bool&gt;&gt;</code> = 表达式树</td></tr>
+<tr><td><code>.Where</code> 实际调用</td><td><code>Enumerable.Where</code></td><td><code>Queryable.Where</code></td></tr>
+<tr><td>执行位置</td><td>C# 进程内</td><td>翻译成 SQL，DB 跑</td></tr>
+<tr><td>典型来源</td><td><code>List&lt;T&gt;</code></td><td>EF Core <code>DbSet&lt;T&gt;</code></td></tr>
+<tr><td>lazy？</td><td>✅</td><td>✅</td></tr>
+</tbody>
+</table>
+
+<div class="key">
+<strong>选哪条路 = 左边静态类型决定。</strong> <code>DbSet&lt;T&gt; : IQueryable&lt;T&gt;, IEnumerable&lt;T&gt;</code>，两个都有，<strong>IQueryable 更具体 → 编译器优先挑它</strong>。所以 lambda 被装进表达式树。
+</div>
+
+<h3>💣 经典生产事故</h3>
+
+<pre><code>// ❌ 凶手是 .ToList() 出现在 .Where() 之前
+var orders = db.Orders.ToList();              // SELECT * 拉走 10M 行！
+return orders.Where(...).Take(50).ToList();   // 已退化成内存过滤
+
+// ✅ 让 SQL 干活
+return db.Orders.Where(...).Take(50).ToList();</code></pre>
+
+<h3>🪤 Repository 出门陷阱</h3>
+
+<pre><code>public IEnumerable&lt;Order&gt; GetBigOrders(DbContext db)   // ← 返回类型砍 SQL 能力
+//     ^^^^^^^^^^^^^^^^^^
+{
+    return db.Orders.Where(o =&gt; o.Amount &gt; 10000).Take(50);
+    // 内部仍是 IQueryable&lt;Order&gt;，出门时被向上转型为 IEnumerable
+}
+
+// 调用方
+var bigRecent = repo.GetBigOrders(db)
+                    .Where(o =&gt; o.Date &gt; DateTime.Today)  // ← Enumerable.Where, 内存
+                    .ToList();
+// 50 行先回内存，再筛日期 —— 永远没机会让 DB 一次性过滤</code></pre>
+
+<div class="key">
+<strong>口诀 #72：</strong>Repository 返回类型 = 契约。返回 <code>IEnumerable&lt;T&gt;</code> 等于挂"到此为止"的牌子；返回 <code>IQueryable&lt;T&gt;</code> 等于"你想叠条件随便"。
+</div>
+
+<h2>口诀 — 6 个新条目（#68–#73）</h2>
+
+<table>
+<thead><tr><th>#</th><th>口诀</th></tr></thead>
+<tbody>
+<tr><td>68</td><td>同级文件夹只能有 1 个 <code>.csproj</code>。否则 SDK 把所有 <code>.cs</code> include 进每个项目 → CS0579 重复属性。一 demo 一文件夹。</td></tr>
+<tr><td>69</td><td><code>IEnumerable&lt;T&gt;</code> 是接口契约（"我能被 foreach"），运行时对象是 Iterator 类（<code>WhereEnumerableIterator</code>、<code>&lt;Demo&gt;d__0</code> 等）。能 foreach ≠ 是 List。</td></tr>
+<tr><td>70</td><td>状态机被动 —— 没人按按钮就不动。foreach/ToList/Count/First 才按按钮；LINQ 链子（Where/Select/...）不按按钮，只是再套一层。</td></tr>
+<tr><td>71</td><td><code>IEnumerable&lt;T&gt;</code> = 本地过滤（filter here，lambda 是 Func）；<code>IQueryable&lt;T&gt;</code> = 远程过滤（filter there，lambda 是 Expression Tree → SQL）。</td></tr>
+<tr><td>72</td><td>Repository 方法的返回类型 = 契约。返 <code>IEnumerable&lt;T&gt;</code> 切断下游推 SQL 的能力；返 <code>IQueryable&lt;T&gt;</code> 留给下游继续叠条件。</td></tr>
+<tr><td>73</td><td>类型决定"翻译成什么"，按按钮决定"什么时候执行"。两件事都要满足。<strong>IEnumerable 和 IQueryable 都是 lazy 的。</strong></td></tr>
+</tbody>
+</table>
+
+<h2>✅ Tier-1 LINQ 14 个收官</h2>
+
+<p>Day 50–52 三天收掉：<code>Where</code> · <code>Select</code> · <code>GroupBy</code> · <code>OrderBy/ThenBy</code> · <code>Take/Skip</code> · <code>ToList/ToArray/ToDictionary</code> · <code>First/Single/Last/Any/All</code> · <code>Count/Sum/Max/Min/Average</code> · <code>Distinct/Union/Intersect/Except</code> · <code>Concat/Zip</code> · <code>Reverse</code> · <code>Cast/OfType</code> · <strong><code>Join</code></strong> · <strong><code>SelectMany</code></strong>。</p>
+
+<h2>下一步候选</h2>
+
+<ul>
+<li><strong>A</strong> — Expression Tree 深挖（拆 <code>o =&gt; o.Amount &gt; 10000</code> 每个节点）</li>
+<li><strong>B</strong> — Generics 深入（约束 / 协变 / 逆变，backlog 老选项）</li>
+<li><strong>C</strong> — <code>IAsyncEnumerable</code> + <code>await foreach</code></li>
+<li><strong>D</strong> — EF Core 实操（SQLite + DbContext + LogTo 打印翻译出的 SQL）</li>
+<li><strong>E</strong> — Records + Pattern Matching</li>
+</ul>
+
+<div class="back" style="margin-top: 40px;"><a href="../dailyread.html">↑ 返回首页</a></div>
+
+</body>
+</html>

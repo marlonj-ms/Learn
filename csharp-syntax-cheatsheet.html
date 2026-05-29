@@ -1836,6 +1836,186 @@ public static class Program
 <strong>锚句：</strong>"<strong>一个 assembly 一个入口点。顶级语句存在时编译器先选它，<code>Main()</code> 被降级成普通静态方法</strong>，只有 warning CS7022，不报错 —— 静默踩坑。"（口诀 #52）
 </div>
 
+<!-- Day 52 · Join + SelectMany + Yield + IQueryable — 坑 68–73 -->
+
+<div class="danger">
+<strong>68. 同级文件夹放多个 <code>.csproj</code> — CS0579 重复属性</strong>
+<pre><code>// 目录结构（错）
+Day52/
+├── Demo-A.cs
+├── Demo-A.csproj
+├── Demo-B.cs
+└── Demo-B.csproj
+
+// .NET SDK 默认：当前目录所有 *.cs 都自动 include 进每个 .csproj
+// → 两份 .cs 进了两个 csproj 各一遍
+// → 两次顶级语句 + 两套 assembly 属性
+// → error CS0579: Duplicate 'TargetFrameworkAttribute' (x7)
+
+// ✅ 修复 A：每个 demo 自己的子文件夹
+Day52/
+├── Demo-A/
+│   ├── Demo-A.cs
+│   └── Demo-A.csproj
+└── Demo-B/
+    ├── Demo-B.cs
+    └── Demo-B.csproj
+
+// ✅ 修复 B：在 .csproj 里精确白名单（少用）
+&lt;ItemGroup&gt;
+  &lt;Compile Remove="**/*.cs" /&gt;
+  &lt;Compile Include="Demo-A.cs" /&gt;
+&lt;/ItemGroup&gt;</code></pre>
+<strong>锚句：</strong>"<strong>一文件夹一 csproj。</strong> SDK 默认把当前目录所有 <code>.cs</code> 都吃进去，多个 csproj 同目录 = 文件被重复编译 = CS0579 重复属性。"（口诀 #68）
+</div>
+
+<div class="danger">
+<strong>69. 把 <code>IEnumerable&lt;T&gt;</code> 当成"具体类型" — 它只是契约</strong>
+<pre><code>// IEnumerable&lt;T&gt; 是接口，定义就一条：
+public interface IEnumerable&lt;T&gt;
+{
+    IEnumerator&lt;T&gt; GetEnumerator();   // "我能被 foreach"
+}
+
+// 运行时返回的 *真实* 对象是各种内部 Iterator 类：
+var q = list.Where(x =&gt; x &gt; 0)        // WhereEnumerableIterator
+            .Select(x =&gt; x * 2);       // SelectEnumerableIterator
+
+static IEnumerable&lt;int&gt; Demo()        // 编译器生成 &lt;Demo&gt;d__0
+{
+    yield return 1;
+}
+
+// ❌ 危险思路："IEnumerable 是 List 的父类"
+List&lt;int&gt; lst = list.Where(x =&gt; x &gt; 0);   // CS0266 不能隐式转
+
+// ✅ 正确："IEnumerable 是契约，运行时可能是任何实现"
+IEnumerable&lt;int&gt; seq = list.Where(x =&gt; x &gt; 0);
+List&lt;int&gt; lst       = seq.ToList();   // 想要 List 必须显式物化</code></pre>
+<strong>锚句：</strong>"<strong><code>IEnumerable&lt;T&gt;</code> 是接口契约（『我能被 foreach』），运行时对象是各种 Iterator 类。</strong>能 foreach ≠ 是 List。"（口诀 #69）
+</div>
+
+<div class="danger">
+<strong>70. 状态机被动 — 没人按按钮就一行不跑</strong>
+<pre><code>static IEnumerable&lt;int&gt; Demo()
+{
+    Console.WriteLine("A");
+    yield return 1;
+    Console.WriteLine("B");
+    yield return 2;
+}
+
+// ❌ 以为这一行就会打印 "A" "B"
+var seq = Demo();                     // 啥都不印 —— 只构造了 &lt;Demo&gt;d__0
+var chain = seq.Where(x =&gt; x &gt; 0)     // 还是啥都不印 —— 多套了一层
+               .Select(x =&gt; x * 10);
+
+// ✅ 真正的"按按钮"才让 body 一段段跑
+foreach (var x in chain) ...          // 按按钮 → 输出 A / B
+chain.ToList();                       // 按按钮
+chain.Count();                        // 按按钮
+chain.First();                        // 按按钮（拿到一个就停）
+await foreach (var x in asyncChain)   // 异步按按钮</code></pre>
+<table>
+<tr><th>按按钮？</th><th>操作</th></tr>
+<tr><td>✅</td><td><code>foreach</code>, <code>ToList</code>, <code>ToArray</code>, <code>ToDictionary</code>, <code>Count</code>, <code>First</code>, <code>Single</code>, <code>Last</code>, <code>Any</code>, <code>All</code>, <code>Sum</code>, <code>Max</code>, <code>Min</code>, <code>Average</code>, <code>string.Join</code>, <code>await foreach</code></td></tr>
+<tr><td>❌</td><td><code>Where</code>, <code>Select</code>, <code>SelectMany</code>, <code>Join</code>, <code>OrderBy</code>, <code>GroupBy</code>, <code>Take</code>, <code>Skip</code> — 只是再套一层状态机</td></tr>
+</table>
+<strong>锚句：</strong>"<strong><code>var seq = chain</code> 只搭管子。<code>foreach</code> / <code>ToList</code> 才把水放进管子。</strong>"（口诀 #70）
+</div>
+
+<div class="danger">
+<strong>71. 没注意 <code>IEnumerable</code> vs <code>IQueryable</code> — 同 lambda 两个世界</strong>
+<pre><code>// 同一段 lambda，左边静态类型不同 → 走完全不同的路
+// ─────────────────────────────────────────────────────
+// 场景 A：左边是 DbSet&lt;Order&gt; → 静态类型实现 IQueryable
+var q1 = db.Orders.Where(o =&gt; o.Amount &gt; 10000);
+//                ↑ 走 Queryable.Where → lambda 编译成 Expression&lt;Func&lt;Order,bool&gt;&gt;
+//                ↑ 整条链翻译成 SQL "WHERE Amount &gt; 10000"，DB 过滤回少量行
+
+// 场景 B：左边是 IEnumerable&lt;Order&gt; → 没 IQueryable 可挑
+IEnumerable&lt;Order&gt; seq = db.Orders;
+var q2 = seq.Where(o =&gt; o.Amount &gt; 10000);
+//          ↑ 只能挑 Enumerable.Where → lambda 编译成 Func&lt;Order,bool&gt;
+//          ↑ 拉所有行回 C# 进程，再过滤
+
+// 💣 真实生产事故
+var orders = db.Orders.ToList();              // ❌ 立刻执行 SELECT * 拉 10M 行！
+return orders.Where(...).Take(50).ToList();   // .ToList() 后已是 List&lt;Order&gt;
+//     ↑ 静态类型 List&lt;Order&gt; → 只能 Enumerable.Where → 内存过滤
+
+// ✅ 正确：让 DB 过滤
+return db.Orders.Where(...).Take(50).ToList();</code></pre>
+<table>
+<tr><th>维度</th><th><code>IEnumerable&lt;T&gt;</code></th><th><code>IQueryable&lt;T&gt;</code></th></tr>
+<tr><td>lambda 编译成</td><td><code>Func&lt;T,bool&gt;</code></td><td><code>Expression&lt;Func&lt;T,bool&gt;&gt;</code> = 表达式树</td></tr>
+<tr><td><code>.Where</code> 真实调用</td><td><code>Enumerable.Where</code></td><td><code>Queryable.Where</code></td></tr>
+<tr><td>执行位置</td><td>C# 进程内</td><td>翻译成 SQL，DB 跑</td></tr>
+<tr><td>典型来源</td><td><code>List&lt;T&gt;</code></td><td>EF Core <code>DbSet&lt;T&gt;</code></td></tr>
+</table>
+<strong>锚句：</strong>"<strong>左边静态类型决定走哪条 Where。</strong> <code>DbSet&lt;T&gt;</code> 同时实现 <code>IQueryable</code> 和 <code>IEnumerable</code>，编译器挑更具体的 <code>IQueryable</code>。一旦类型被『缩小』成 <code>IEnumerable</code>，就再回不去 SQL。"（口诀 #71）
+</div>
+
+<div class="danger">
+<strong>72. Repository 返回 <code>IEnumerable&lt;T&gt;</code> — 砍掉下游推 SQL 的能力</strong>
+<pre><code>// 🪤 出门陷阱：返回类型被向上转型（implicit upcast）
+public IEnumerable&lt;Order&gt; GetBigOrders(MyDbContext db)
+//     ^^^^^^^^^^^^^^^^^^                    ← 出门口契约
+{
+    return db.Orders.Where(o =&gt; o.Amount &gt; 10000);
+    // 内部仍是 IQueryable&lt;Order&gt;
+    // 但 return 语句触发隐式上转：装进 IEnumerable 的"小盒子"
+}
+
+// 调用方 —— 无法再推 SQL
+var bigRecent = repo.GetBigOrders(db)
+                    .Where(o =&gt; o.Date &gt; DateTime.Today)  // ❌ Enumerable.Where 内存过滤
+                    .ToList();
+// 几万行先回内存，再筛日期，永远没机会让 DB 一次性过滤
+
+// ✅ 修复 A：返回类型改 IQueryable&lt;T&gt;，下游能继续推 SQL
+public IQueryable&lt;Order&gt; GetBigOrders(MyDbContext db)
+    =&gt; db.Orders.Where(o =&gt; o.Amount &gt; 10000);
+
+// ✅ 修复 B：故意返回 IEnumerable，但在内部把过滤封死
+public IReadOnlyList&lt;Order&gt; GetBigOrders(MyDbContext db, DateTime since)
+    =&gt; db.Orders.Where(o =&gt; o.Amount &gt; 10000 &amp;&amp; o.Date &gt; since)
+                .ToList();
+//   两种风格都对 —— 关键是有意识地选</code></pre>
+<strong>锚句：</strong>"<strong>Repository 返回类型 = 契约。</strong> 返 <code>IEnumerable&lt;T&gt;</code> 等于挂『到此为止』的牌子；返 <code>IQueryable&lt;T&gt;</code> 等于『你随便叠条件，我都翻给数据库』。运行时对象不变，<strong>编译器层面能力被砍</strong>。"（口诀 #72）
+</div>
+
+<div class="danger">
+<strong>73. 以为 <code>IQueryable</code> 不 lazy — 误判 SQL 发出时机</strong>
+<pre><code>// ❌ 以为这一行立刻发 SQL
+var q = db.Orders.Where(o =&gt; o.Amount &gt; 10000);
+// 实际：只构造了 Expression Tree，DB 没动一下
+
+// ✅ 真正的"按按钮"才发 SQL：
+foreach (var o in q) ...              // 按按钮 → 发 SELECT
+var list = q.ToList();                // 按按钮 → 发 SELECT
+var n    = q.Count();                 // 按按钮 → 发 SELECT COUNT(*)
+var first= q.First();                 // 按按钮 → 发 SELECT TOP 1
+await q.ToListAsync();                // 按按钮 → 发 SELECT（async）
+
+// ⚠️ 同样：构造再多链子都不发 SQL
+var bigger = q.Where(o =&gt; o.Date &gt; DateTime.Today)
+              .OrderBy(o =&gt; o.Date)
+              .Take(50);
+// 还是没发 SQL —— Expression Tree 又加了几个节点而已
+
+// 💣 多次按按钮 = 多次发 SQL
+if (q.Any())                          // 第 1 次 SQL: SELECT TOP 1
+{
+    var n = q.Count();                // 第 2 次 SQL: SELECT COUNT(*)
+    foreach (var o in q) ...          // 第 3 次 SQL: SELECT *
+}
+// ✅ 修复：物化一次
+var snapshot = q.ToList();            // 唯一一次 SQL
+if (snapshot.Count &gt; 0) { ... }</code></pre>
+<strong>锚句：</strong>"<strong>类型决定『翻译成什么』，按按钮决定『什么时候执行』。</strong> <code>IEnumerable</code> 和 <code>IQueryable</code> 都是 lazy 的 —— 没人按按钮，SQL 永远不会发出去；按多次，SQL 跑多次。"（口诀 #73）
+</div>
+
 <a class="back-top" href="#">↑ 回到顶部</a>
 
 <!-- ============================================================ -->
