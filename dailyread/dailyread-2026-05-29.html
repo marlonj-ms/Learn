@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>2026-05-29 · LINQ 链式流利度 🔗</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; max-width: 860px; margin: 40px auto; padding: 0 24px 80px; line-height: 1.75; color: #1f2328; background: #fbfbfb; }
+  h1 { border-bottom: 3px solid #1a7f37; padding-bottom: 8px; color: #1a7f37; }
+  h2 { border-left: 4px solid #1a7f37; padding-left: 10px; margin-top: 34px; color: #1f2328; font-size: 1.3em; }
+  h3 { color: #1a7f37; margin-top: 22px; font-size: 1.08em; }
+  code { background: #eef2f6; padding: 2px 6px; border-radius: 4px; font-family: "Consolas", monospace; font-size: 0.94em; color: #cf222e; }
+  pre { background: #1f2328; color: #e6edf3; padding: 12px 16px; border-radius: 8px; overflow-x: auto; font-size: 0.86em; }
+  pre code { background: none; color: inherit; padding: 0; }
+  .key { background: #e6f7ec; border-left: 4px solid #1a7f37; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .note { background: #fff8c5; border-left: 4px solid #d4a72c; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .danger { background: #ffebe9; border-left: 4px solid #cf222e; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .ok-box { background: #dafbe1; border-left: 4px solid #1a7f37; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  a { color: #0969da; text-decoration: none; } a:hover { text-decoration: underline; }
+  .back { font-size: 0.9em; color: #57606a; margin-bottom: 16px; }
+  .meta { color: #57606a; font-size: 0.9em; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 0.95em; }
+  th, td { border: 1px solid #d0d7de; padding: 6px 10px; text-align: left; vertical-align: top; }
+  th { background: #f6f8fa; }
+</style>
+</head>
+<body>
+
+<div class="back"><a href="../dailyread.html">返回首页</a></div>
+
+<h1>LINQ 链式流利度 🔗</h1>
+<p class="meta">2026-05-29 · 3 Parts + 毕业题 · 配套：<a href="../2026-05-29/LINQ-Chain-Fluency-Summary.md">完整 Summary</a> · <a href="../2026-05-29/LINQ-Part1-Deferred-Execution-Summary.md">Part 1 详细笔记</a> · <a href="../2026-05-29/LINQ-Chain-Fluency-Demo.cs">可跑 demo</a></p>
+
+<div class="ok-box">
+<strong>一句话：</strong>「<code>Where</code> 是配方，<code>Select</code> 换形状，<code>GroupBy</code> 装袋子，<code>OrderBy</code> 升级成 <code>IOrderedEnumerable&lt;&gt;</code> 等 <code>ThenBy</code>，<code>ToList()</code> 才下锅」—— 一条链的每一步返回类型 + 延迟时机全都盲读得出。毕业题 20.5/21 通过。
+</div>
+
+<h2>3 大签名解码</h2>
+
+<table>
+<thead><tr><th>方法</th><th>签名</th><th>关键</th></tr></thead>
+<tbody>
+<tr><td><code>Where</code></td><td><code>IEnumerable&lt;TSource&gt; Where&lt;TSource&gt;(this IEnumerable&lt;TSource&gt;, Func&lt;TSource,bool&gt;)</code></td><td>1 个泛型参，保类型，减个数</td></tr>
+<tr><td><code>Select</code></td><td><code>IEnumerable&lt;TResult&gt; Select&lt;TSource,TResult&gt;(this IEnumerable&lt;TSource&gt;, Func&lt;TSource,TResult&gt;)</code></td><td>2 个泛型参，换类型，保个数</td></tr>
+<tr><td><code>GroupBy</code></td><td><code>IEnumerable&lt;IGrouping&lt;TKey,TSource&gt;&gt; GroupBy&lt;TSource,TKey&gt;(this IEnumerable&lt;TSource&gt;, Func&lt;TSource,TKey&gt;)</code></td><td>双层嵌套登场</td></tr>
+<tr><td><code>OrderBy</code></td><td><code>IOrderedEnumerable&lt;TSource&gt; OrderBy&lt;TSource,TKey&gt;(this IEnumerable&lt;TSource&gt;, Func&lt;TSource,TKey&gt;)</code></td><td>升级版接口，才能链 <code>ThenBy</code></td></tr>
+</tbody>
+</table>
+
+<h2><code>IGrouping&lt;TKey,TElement&gt;</code> 那个袋子</h2>
+
+<pre><code>public interface IGrouping&lt;out TKey, out TElement&gt; : IEnumerable&lt;TElement&gt;
+{
+    TKey Key { get; }   // 袋子标签
+}</code></pre>
+
+<ul>
+<li>外面贴 <code>Key</code> 标签</li>
+<li>本身 <code>: IEnumerable&lt;TElement&gt;</code> → 袋子可以直接 <code>foreach</code></li>
+<li><strong>双层泛型 = 双层 foreach</strong></li>
+</ul>
+
+<pre><code>foreach (var g in orders.GroupBy(o =&gt; o.Status))
+{
+    Console.WriteLine($"标签: {g.Key}");
+    foreach (var o in g)          // ← 袋子本身可 foreach
+        Console.WriteLine($"  {o.Id}, Status={o.Status}");  // Status 没丢!
+}</code></pre>
+
+<h2>口诀 — 8 个新条目（#44–51）+ 1 个意外收获（#52）</h2>
+
+<table>
+<thead><tr><th>#</th><th>口诀</th></tr></thead>
+<tbody>
+<tr><td>44</td><td>LINQ 操作返回 <code>IEnumerable&lt;T&gt;</code>，不是你输入的具体类型。能 foreach ≠ 是 List</td></tr>
+<tr><td>45</td><td><code>IEnumerable&lt;T&gt;</code> 每被 foreach/Count/Any 一次，整本配方重跑一次。要复用先 <code>.ToList()</code></td></tr>
+<tr><td>46</td><td>延迟执行 = 配方在 <code>ToList()</code>/foreach 那一刻才看数据源。期间改源会看到新值</td></tr>
+<tr><td>47</td><td><code>Select</code> 保个数换类型；<code>Where</code> 保类型减个数</td></tr>
+<tr><td>48</td><td><code>new(...)</code> 目标类型 new；<code>[...]</code> 集合表达式；都靠左边推断。<code>var</code> + 这两种 = 错</td></tr>
+<tr><td>49</td><td><code>GroupBy</code> 返回 <code>IEnumerable&lt;IGrouping&lt;TKey,T&gt;&gt;</code> 双层。外层一串袋子，每个袋子带 Key 且可 foreach</td></tr>
+<tr><td>50</td><td><code>GroupBy</code> 袋子顺序在 LINQ to Objects 是"首次出现"序，但接口不承诺。要顺序就 <code>OrderBy</code></td></tr>
+<tr><td>51</td><td><code>GroupBy(keySelector)</code> 只贴标签，不改元素。袋里装的是完整 <code>TSource</code>，包括分组字段本身</td></tr>
+<tr><td>52</td><td>一个 assembly 只能有一个入口点。顶级语句存在时编译器优先选它，<code>Main()</code> 被降级成普通静态方法（仅 warning CS7022）</td></tr>
+</tbody>
+</table>
+
+<h2>💣 LINQ 最经典生产事故 — Multiple Enumeration</h2>
+
+<div class="danger">
+<strong>反例（数据库被打 3N 次）：</strong>
+<pre><code>var query = users
+    .Where(u =&gt; SlowDatabaseLookup(u.Id))   // N 次往返
+    .Select(u =&gt; u.Name);
+
+if (query.Any())                                // N 次
+{
+    Console.WriteLine($"找到 {query.Count()} 个");   // 又 N 次
+    foreach (var name in query) ...             // 再 N 次
+}</code></pre>
+</div>
+
+<div class="ok-box">
+<strong>正例（加一行，N 次）：</strong>
+<pre><code>var names = users
+    .Where(u =&gt; SlowDatabaseLookup(u.Id))
+    .Select(u =&gt; u.Name)
+    .ToList();                                  // ← 一次煮熟
+
+if (names.Count &gt; 0)
+{
+    Console.WriteLine($"找到 {names.Count} 个");
+    foreach (var name in names) ...
+}</code></pre>
+ReSharper / Rider 警告：<strong>"Possible multiple enumeration of IEnumerable"</strong>
+</div>
+
+<h2>现代 C# 三件套（顺带习得）</h2>
+
+<h3>1. <code>record</code> 主构造器</h3>
+<pre><code>public record Order(int Id, decimal Amount, string Status);
+// 一行 = 类 + 3 属性 + 位置构造函数 + 值相等 + ToString</code></pre>
+
+<h3>2. Target-typed <code>new(...)</code>（C# 9+）</h3>
+<pre><code>List&lt;User&gt; users = [ new(1, "Alice", "a@x.com", 30) ];
+//                   ↑ 编译器看左边推断成 User
+
+// ❌ 不能 var x = new(1, "Alice");   没有目标类型可推断</code></pre>
+
+<h3>3. Collection expression <code>[...]</code>（C# 12+）</h3>
+<pre><code>List&lt;int&gt; a = new List&lt;int&gt; { 1, 2, 3 };
+List&lt;int&gt; b = new() { 1, 2, 3 };
+List&lt;int&gt; c = [ 1, 2, 3 ];                     // ← 最简洁</code></pre>
+
+<h2>🎓 毕业题：Top Customer 综合链</h2>
+
+<pre><code>var report = orders
+    .Where(o =&gt; o.Status == "Paid")
+    .GroupBy(o =&gt; o.CustomerName)
+    .Select(g =&gt; new {
+        Customer = g.Key,
+        OrderCount = g.Count(),
+        TotalSpent = g.Sum(o =&gt; o.Amount)
+    })
+    .OrderByDescending(x =&gt; x.TotalSpent)
+    .ToList();</code></pre>
+
+<table>
+<thead><tr><th>行</th><th>类型</th></tr></thead>
+<tbody>
+<tr><td><code>orders</code></td><td><code>List&lt;Order&gt;</code></td></tr>
+<tr><td><code>.Where(...)</code></td><td><code>IEnumerable&lt;Order&gt;</code></td></tr>
+<tr><td><code>.GroupBy(...)</code></td><td><code>IEnumerable&lt;IGrouping&lt;string, Order&gt;&gt;</code></td></tr>
+<tr><td><code>.Select(...)</code></td><td><code>IEnumerable&lt;匿名类型&gt;</code></td></tr>
+<tr><td><code>.OrderByDescending(...)</code></td><td><code>IOrderedEnumerable&lt;匿名类型&gt;</code></td></tr>
+<tr><td><code>.ToList()</code></td><td><code>List&lt;匿名类型&gt;</code></td></tr>
+</tbody>
+</table>
+
+<div class="ok-box">
+🥇 第一名 = <strong>Bob, $750, 2 单</strong>（Demo 实跑通过）
+</div>
+
+<h2>💀 今天反复踩的坑（追加到 cheatsheet 63–67）</h2>
+
+<div class="danger"><strong>坑 63：</strong>多次枚举 <code>IEnumerable&lt;T&gt;</code> —— 每 foreach/Count/Any 一次配方重跑一次。复用前必须 <code>.ToList()</code> 物化</div>
+
+<div class="danger"><strong>坑 64：</strong>把 <code>Where()</code> 的结果当 <code>List&lt;T&gt;</code> —— 输入 <code>List&lt;int&gt;</code>，输出还是 <code>IEnumerable&lt;int&gt;</code>（具体是 <code>*Iterator</code>）</div>
+
+<div class="danger"><strong>坑 65：</strong><code>var</code> + 集合表达式 <code>[...]</code> 或目标类型 <code>new(...)</code> —— 编译失败，因为右边没类型可推断，必须左边写明类型</div>
+
+<div class="danger"><strong>坑 66：</strong>假设 <code>GroupBy</code> 袋子顺序固定 —— LINQ to Objects 给"首次出现"序，但接口不承诺；其它 provider（EF、PLINQ）不保证。要顺序就显式 <code>OrderBy(g =&gt; g.Key)</code></div>
+
+<div class="danger"><strong>坑 67：</strong>同一 assembly 顶级语句 + <code>Main()</code> 共存 —— 编译器静默选顶级语句，你写的 <code>Main()</code> 被降级（仅 warning CS7022），运行结果可能"看似正常实则跑错入口"。解决：删并行 <code>Program.cs</code>，或在 csproj 加 <code>&lt;StartupObject&gt;Namespace.Program&lt;/StartupObject&gt;</code> 强制报错</div>
+
+<h2>🅿️ 仍然 PARK</h2>
+<ul>
+<li><strong>Variance 深层 reasoning</strong> —— Day 49/51 双次延期；今天看到 <code>IGrouping&lt;out TKey, out TElement&gt;</code> 是好诱饵 → Day 52 候选 C</li>
+<li><strong>IL 检视</strong> —— Day 47 工具就绪，泛型/records 时回看</li>
+<li><strong>Local NuGet feed 回环</strong> —— Day 47 三个 .nupkg 已产出</li>
+</ul>
+
+<h2>🪜 Day 52 候选</h2>
+<ul>
+<li><strong>A — <code>Join</code> + <code>SelectMany</code> 🌟（推荐）</strong>：今天剩下的两个高频 LINQ 操作。<code>Join</code> 跨集合关联（≈ SQL INNER JOIN），<code>SelectMany</code> 把"集合的集合"压平。补完这两个 LINQ 全家桶就 close</li>
+<li><strong>B — Records + Pattern Matching</strong>：今天用了 <code>record Order(...)</code> 但没系统讲值相等 / <code>with</code> / type/property/list pattern</li>
+<li><strong>C — Variance 回头路</strong>：从 <code>IGrouping&lt;out TKey, out TElement&gt;</code> 反推 <code>out</code> 为什么安全</li>
+</ul>
+
+<div class="key">
+<strong>建议默认 A（Join + SelectMany）</strong>。让用户选 / 否决 / 给完全不同的方向。
+</div>
+
+</body>
+</html>

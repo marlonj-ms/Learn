@@ -1735,6 +1735,107 @@ decimal b = 0.1m + 0.2m;   // = 0.3                   ✅</code></pre>
 <strong>锚句：</strong>"嵌套泛型的逗号，<strong>归谁要看 <code>&lt;&gt;</code> 配对的深度</strong>。" 这一条把"剥洋葱解码法"变成可机械执行的步骤。
 </div>
 
+<!-- Day 51 · LINQ Chain Fluency — 坑 63–67 -->
+
+<div class="danger">
+<strong>63. 多次枚举 <code>IEnumerable&lt;T&gt;</code> — 每用一次配方就重跑一次</strong>
+<pre><code>var query = users
+    .Where(u =&gt; SlowDbLookup(u.Id))         // 配方，没跑
+    .Select(u =&gt; u.Name);
+
+if (query.Any())                             // ❌ 跑了一次 (N 次 DB)
+{
+    Console.WriteLine(query.Count());        // ❌ 又跑了一次 (N 次 DB)
+    foreach (var n in query) ...             // ❌ 第三次 (N 次 DB)
+}
+
+// ✅ 加一行物化，3N 变 N
+var names = users.Where(...).Select(...).ToList();
+if (names.Count &gt; 0)
+{
+    Console.WriteLine(names.Count);
+    foreach (var n in names) ...
+}</code></pre>
+<strong>锚句：</strong>"<code>IEnumerable&lt;T&gt;</code> 是配方不是菜。<strong>要复用先 <code>.ToList()</code> 煮熟。</strong>"（口诀 #45）<br>
+ReSharper / Rider 警告：<strong>Possible multiple enumeration of IEnumerable</strong>
+</div>
+
+<div class="danger">
+<strong>64. 把 <code>Where()</code>/<code>Select()</code> 的结果当 <code>List&lt;T&gt;</code></strong>
+<pre><code>List&lt;int&gt; nums = [1, 2, 3];
+var filtered = nums.Where(n =&gt; n &gt; 1);
+
+filtered.Add(99);     // ❌ IEnumerable&lt;int&gt; 没有 Add
+filtered[0];          // ❌ 没有索引器
+filtered.Count;       // ❌ 没有 Count 属性 (Count() 方法可以，但每次重跑)
+
+// ✅ 想用 List API 必须显式物化
+List&lt;int&gt; list = nums.Where(n =&gt; n &gt; 1).ToList();
+list.Add(99);  list[0];  var c = list.Count;</code></pre>
+<strong>锚句：</strong>"<strong>LINQ 操作返回 <code>IEnumerable&lt;T&gt;</code>，不是你输入的具体类型。</strong>能 foreach ≠ 是 List。"（口诀 #44）
+</div>
+
+<div class="danger">
+<strong>65. <code>var</code> + 集合表达式 <code>[...]</code> 或目标类型 <code>new(...)</code> — 编译失败</strong>
+<pre><code>// ❌ 右边没类型可推断
+var a = [1, 2, 3];                  // CS9176 / CS8754
+var b = new(1, "Alice");            // CS8754
+
+// ✅ 左边写明类型 → 编译器目标推断
+List&lt;int&gt; a = [1, 2, 3];            // 集合表达式
+User b = new(1, "Alice");           // target-typed new
+
+// ✅ 或显式写完类型
+var a = new List&lt;int&gt; { 1, 2, 3 };
+var b = new User(1, "Alice");</code></pre>
+<strong>锚句：</strong>"<code>[...]</code> 和 <code>new(...)</code> 都要左边告诉它<strong>要什么形状</strong>，不能光靠右边裸跑。"（口诀 #48）
+</div>
+
+<div class="danger">
+<strong>66. 假设 <code>GroupBy</code> 袋子顺序固定 — 接口不承诺</strong>
+<pre><code>// LINQ to Objects 实际给的是"首次出现"序，但仅是实现细节
+var groups = orders.GroupBy(o =&gt; o.Status);
+foreach (var g in groups)
+    Console.WriteLine(g.Key);   // 当前实现：Paid, Cancelled, Pending
+
+// ❌ 同样代码在 EF Core / PLINQ / LINQ to XML 可能顺序不同
+//    甚至 LINQ to Objects 升级也可能变
+
+// ✅ 要顺序就显式 OrderBy
+var stable = orders
+    .GroupBy(o =&gt; o.Status)
+    .OrderBy(g =&gt; g.Key);       // 字典序：Cancelled, Paid, Pending</code></pre>
+<strong>锚句：</strong>"<strong>GroupBy 的袋子顺序，接口不承诺。</strong>要稳就显式 <code>OrderBy</code>。"（口诀 #50）
+</div>
+
+<div class="danger">
+<strong>67. 同一 assembly 顶级语句 + <code>Main()</code> 共存 — 静默选顶级语句</strong>
+<pre><code>// 文件 1: Program.cs (dotnet new console 默认)
+Console.WriteLine("Hello, World!");      // ← 顶级语句
+
+// 文件 2: MyDemo.cs (你自己写的 demo)
+public static class Program
+{
+    public static void Main()             // ❌ 编译器 warning CS7022:
+    {                                     //    The entry point of the program
+        Console.WriteLine("Demo!");       //    is global code; ignoring 'Main()'
+    }
+}
+
+// dotnet run → 输出 "Hello, World!"，不是 "Demo!"
+//   exit 0，只有 warning，没有 error，最容易漏掉
+
+// ✅ 解决方案 (4 选 1)
+// A. 删掉默认 Program.cs，让 demo 的 Main 成为唯一入口
+// B. 直接编辑 Program.cs，不要新开文件
+// C. 把 demo 文件重命名成 Program.cs
+// D. 在 .csproj 加 StartupObject，强制硬错而不是 warning：
+//    &lt;PropertyGroup&gt;
+//      &lt;StartupObject&gt;MyNamespace.Program&lt;/StartupObject&gt;
+//    &lt;/PropertyGroup&gt;</code></pre>
+<strong>锚句：</strong>"<strong>一个 assembly 一个入口点。顶级语句存在时编译器先选它，<code>Main()</code> 被降级成普通静态方法</strong>，只有 warning CS7022，不报错 —— 静默踩坑。"（口诀 #52）
+</div>
+
 <a class="back-top" href="#">↑ 回到顶部</a>
 
 <!-- ============================================================ -->
