@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>2026-05-31 · EF Core 变更追踪 + DI 反衬 🔍</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; max-width: 860px; margin: 40px auto; padding: 0 24px 80px; line-height: 1.75; color: #1f2328; background: #fbfbfb; }
+  h1 { border-bottom: 3px solid #1a7f37; padding-bottom: 8px; color: #1a7f37; }
+  h2 { border-left: 4px solid #1a7f37; padding-left: 10px; margin-top: 34px; color: #1f2328; font-size: 1.3em; }
+  h3 { color: #1a7f37; margin-top: 22px; font-size: 1.08em; }
+  code { background: #eef2f6; padding: 2px 6px; border-radius: 4px; font-family: "Consolas", monospace; font-size: 0.94em; color: #cf222e; }
+  pre { background: #1f2328; color: #e6edf3; padding: 12px 16px; border-radius: 8px; overflow-x: auto; font-size: 0.86em; }
+  pre code { background: none; color: inherit; padding: 0; }
+  .key { background: #e6f7ec; border-left: 4px solid #1a7f37; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .note { background: #fff8c5; border-left: 4px solid #d4a72c; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .danger { background: #ffebe9; border-left: 4px solid #cf222e; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .ok-box { background: #dafbe1; border-left: 4px solid #1a7f37; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  a { color: #0969da; text-decoration: none; } a:hover { text-decoration: underline; }
+  .back { font-size: 0.9em; color: #57606a; margin-bottom: 16px; }
+  .meta { color: #57606a; font-size: 0.9em; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 0.95em; }
+  th, td { border: 1px solid #d0d7de; padding: 6px 10px; text-align: left; vertical-align: top; }
+  th { background: #f6f8fa; }
+</style>
+</head>
+<body>
+
+<div class="back"><a href="../dailyread.html">返回首页</a></div>
+
+<h1>EF Core 变更追踪 + DI 反衬 🔍</h1>
+<p class="meta">2026-05-31 · Day 54 · 配套：<a href="../2026-05-31/ChangeTracking-Summary.md">完整 Summary</a> · <a href="../2026-05-31/EFCore-ChangeTracking/Program.cs">可跑 demo</a></p>
+
+<div class="ok-box">
+<strong>一句话：</strong>「快照对比（snapshot comparison）= EF Core 自动 diff 的全部秘密。<code>SaveChanges</code> 不是无脑写库，而是查询时拍照、提交时逐字段 diff，<strong>只为变了的字段发 UPDATE</strong>；<code>AsNoTracking</code> = 关闭快照，性能换掉自动 diff。」三场景实测全跑通 ✅，两道检查题全对 ✅。
+</div>
+
+<h2>三场景实测对照（看 SQL 真相）</h2>
+
+<table>
+<thead><tr><th>场景</th><th>操作</th><th>控制台 SQL</th><th>结论</th></tr></thead>
+<tbody>
+<tr>
+  <td><strong>A</strong></td>
+  <td>查 Id=1（22.5）→ <code>r.Celsius = 99.9</code> → SaveChanges</td>
+  <td><code>UPDATE "Readings" SET "Celsius" = @p0 WHERE "Id" = @p1</code> 参数 <code>99.9, 1</code></td>
+  <td>diff 发现变化 → 发 UPDATE</td>
+</tr>
+<tr>
+  <td><strong>B</strong></td>
+  <td>查 Id=2（31.0）→ <code>r.Celsius = 31.0</code> → SaveChanges</td>
+  <td><strong>只有 SELECT，无 UPDATE</strong></td>
+  <td>diff 发现啥也没变 → 零 SQL</td>
+</tr>
+<tr>
+  <td><strong>C</strong></td>
+  <td><code>AsNoTracking()</code> 查 Id=3 → <code>r.Celsius = 77.7</code> → SaveChanges</td>
+  <td><strong>只有 SELECT，无 UPDATE</strong></td>
+  <td>没追踪 = 没快照 = 没 diff → 改了白改</td>
+</tr>
+</tbody>
+</table>
+
+<h2>Day 53 遗留问题：<code>Set&lt;Reading&gt;()</code> 是哪个类上的方法？</h2>
+
+<pre><code>// DbContext 基类源码（伪代码）
+public abstract class DbContext : IDisposable
+{
+    private readonly Dictionary&lt;Type, object&gt; _setCache = new();   // 实例字段
+
+    public virtual DbSet&lt;TEntity&gt; Set&lt;TEntity&gt;() where TEntity : class
+    {
+        if (!_setCache.TryGetValue(typeof(TEntity), out var set))
+        {
+            set = new InternalDbSet&lt;TEntity&gt;(this);
+            _setCache[typeof(TEntity)] = set;
+        }
+        return (DbSet&lt;TEntity&gt;)set;
+    }
+}</code></pre>
+
+<ul>
+<li><code>DbSet&lt;T&gt;</code> = EF Core <strong>DLL 里</strong>的泛型类（实现 <code>IQueryable&lt;T&gt;</code>）</li>
+<li><code>Set&lt;TEntity&gt;()</code> = <strong><code>DbContext</code> 基类</strong>上的 <code>protected</code> 泛型方法</li>
+<li>子类 <code>SensorDbContext : DbContext</code> 继承得来 → 不加前缀裸调</li>
+<li><code>_setCache</code> 是 <strong>实例字段</strong> → 每个 DbContext 实例独立</li>
+</ul>
+
+<h2>🔥 <code>OnConfiguring</code> ≠ DI（反衬 DI 概念）</h2>
+
+<table>
+<thead><tr><th>维度</th><th>当前代码（OnConfiguring）</th><th>DI 版本（AddDbContext）</th></tr></thead>
+<tbody>
+<tr><td>配置位置</td><td>DbContext 内部硬编码</td><td>外部组合根（Program.cs）</td></tr>
+<tr><td>谁决定连哪个库</td><td>DbContext 自己</td><td>容器 / 配置文件</td></tr>
+<tr><td>谁负责造 DbContext</td><td>你 <code>new SensorDbContext()</code></td><td>容器按配方造</td></tr>
+<tr><td>测试时换内存库</td><td>❌ 得改源码</td><td>✅ <code>UseInMemoryDatabase</code> 一行</td></tr>
+<tr><td>生命周期</td><td>你自己 Dispose</td><td>容器管，默认 <strong>Scoped</strong></td></tr>
+<tr><td>适用场景</td><td>学习 demo / 控制台脚本</td><td>生产 Web/API</td></tr>
+</tbody>
+</table>
+
+<div class="key">
+<strong>锚句：</strong><code>OnConfiguring</code> = "DbContext 你自己想办法连库"；<code>AddDbContext</code> = "容器，请按这个配方造 DbContext，谁要谁拿"。<strong>后者才是 DI。</strong>
+</div>
+
+<h2>🎓 两道综合检查题（学习者全对）</h2>
+
+<div class="ok-box">
+<strong>Q1：</strong>4 行全查出来，改 1 / 同值 1 / 改 1 / 改 1 → SaveChanges 发几条 UPDATE？<br>
+<strong>答 3 条 ✅</strong> ── EF 只为 diff 出有差异的行发 UPDATE，同值行被跳过。
+</div>
+
+<div class="ok-box">
+<strong>Q2：</strong><code>AsNoTracking()</code> 查 4 行，改其中 2 行 → SaveChanges 发几条 UPDATE？<br>
+<strong>答 0 条 ✅</strong> ── 没追踪 = 没快照 = ChangeTracker 里啥也没有，SaveChanges 找不到要 diff 的东西。
+</div>
+
+<h2>口诀 — 7 个新条目（#79–85）</h2>
+
+<table>
+<thead><tr><th>#</th><th>口诀</th></tr></thead>
+<tbody>
+<tr><td>79</td><td><code>DbSet&lt;T&gt;</code> 是 EF Core <strong>DLL 里</strong>定义的泛型类（实现 <code>IQueryable&lt;T&gt;</code>），表的入口。</td></tr>
+<tr><td>80</td><td><code>Set&lt;TEntity&gt;()</code> 是 <code>DbContext</code> <strong>基类</strong>上的泛型方法。子类继承得来 → 不加前缀裸调。</td></tr>
+<tr><td>81</td><td><code>Set&lt;T&gt;()</code> 的缓存（<code>Dictionary&lt;Type, object&gt;</code>）是 <strong><code>DbContext</code> 的实例字段</strong> —— 每个 DbContext 实例一份。</td></tr>
+<tr><td>82</td><td><strong>快照对比（snapshot comparison）实锤</strong>：set 同值 = 零 SQL。不是 EF 偷懒，是 diff 真的为空。</td></tr>
+<tr><td>83</td><td><code>AsNoTracking</code> = 没快照 → 改属性 EF 完全不知道，<code>SaveChanges</code> 不会发 UPDATE。只读必加。</td></tr>
+<tr><td>84</td><td>追踪 = 内存代价：每个追踪实体在 ChangeTracker 里多占一份快照副本。表大时这开销可观。</td></tr>
+<tr><td>85</td><td><code>OnConfiguring</code> 自配置 ≠ DI。<strong>DI 版本</strong>：删 <code>OnConfiguring</code>，构造器接收 <code>DbContextOptions&lt;T&gt;</code>，组合根 <code>AddDbContext</code> 注册。</td></tr>
+</tbody>
+</table>
+
+<div class="key">累计口诀 <strong>85</strong> 条。</div>
+
+<h2>💀 今天反复踩的坑（追加到 cheatsheet 74–76）</h2>
+
+<div class="danger">
+<strong>坑 74：</strong><code>AsNoTracking()</code> 后改属性 → SaveChanges 静默无效。生产事故级写法：
+<pre><code>var user = await db.Users.AsNoTracking().FirstAsync(u =&gt; u.Id == id);
+user.Email = newEmail;
+await db.SaveChangesAsync();   // ❌ 啥也没发生，但开发者以为存了</code></pre>
+修复 A：不要 <code>AsNoTracking</code>；修复 B：显式 <code>db.Update(user)</code>。
+</div>
+
+<div class="danger">
+<strong>坑 75：</strong>把 <code>OnConfiguring</code> 留在生产 ASP.NET Core 项目里 —— 配置硬编码、测试换不了内存库、生命周期不受容器管。生产必须删掉 <code>OnConfiguring</code>，改成构造器注入 <code>DbContextOptions&lt;T&gt;</code> + 组合根 <code>AddDbContext</code>。
+</div>
+
+<div class="danger">
+<strong>坑 76：</strong>误以为 <code>SaveChanges</code> 会把所有"加载到内存"的实体都写回库 —— 实际只写"被追踪 + diff 有变化"的那些。没追踪的实体（<code>AsNoTracking</code> 或显式 detach）一律跳过。
+</div>
+
+<h2>📂 今天产出文件</h2>
+
+<pre><code>2026-05-31/
+  EFCore-ChangeTracking/
+    Program.cs                       ← 三场景实测 demo（A/B/C + 最终校验）
+    EFCore-ChangeTracking.csproj     ← 引用 Microsoft.EntityFrameworkCore.Sqlite 10.0.8
+    sensor.db                        ← SQLite 文件
+  ChangeTracking-Summary.md          ← 完整 Summary</code></pre>
+
+<h2>🅿️ Day 55 Resume Point</h2>
+
+<p>目标：把 EF Core 接入现有 <code>TemperatureSensor.Api</code>，替换假数据。3 步：</p>
+
+<pre><code>// 1. SensorDbContext: 删 OnConfiguring，加构造器
+public SensorDbContext(DbContextOptions&lt;SensorDbContext&gt; options) : base(options) { }
+
+// 2. Program.cs（组合根）
+builder.Services.AddDbContext&lt;SensorDbContext&gt;(opts =&gt;
+    opts.UseSqlite(builder.Configuration.GetConnectionString("Db"))
+        .LogTo(Console.WriteLine, LogLevel.Information));
+
+// 3. 路由签名（DI 注入 + 今天学的 AsNoTracking）
+app.MapGet("/readings", (SensorDbContext db) =&gt;
+    db.Readings.AsNoTracking().ToList());</code></pre>
+
+<div class="key">
+生命周期会自动是 <strong>Scoped</strong>（默认）—— 每个 HTTP 请求一个新 DbContext，请求结束自动 Dispose。这正是 Day 24 学的「scope = HTTP request」落地。
+</div>
+
+<h2>🏁 Today's One-Line Win</h2>
+
+<div class="ok-box">
+<strong>「亲眼看 set 同值 = 0 条 UPDATE、AsNoTracking 改属性 = 0 条 UPDATE，Day 53 留下的『快照对比』理论今天全部落地成可重现的控制台证据。」</strong>
+</div>
+
+</body>
+</html>

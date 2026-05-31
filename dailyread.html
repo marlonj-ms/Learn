@@ -96,8 +96,18 @@
 
 <h1>C# Daily Read</h1>
 <p class="subtitle">每日学习复习首页 — 每个子页面 5 分钟内读完</p>
-<a class="card today" href="dailyread/dailyread-2026-05-29-day52.html">
-  <div class="date">2026-05-29 (PM) · 今天 <span class="tag">最新</span></div>
+<a class="card today" href="dailyread/dailyread-2026-05-31.html">
+  <div class="date">2026-05-31 · 今天 <span class="tag">最新</span></div>
+  <div class="title">Day 54 · EF Core 变更追踪 + DI 反衬 🔍 — 快照对比实锤 + AsNoTracking 三场景</div>
+  <div class="desc">三场景实测：A 改值发 UPDATE / B set 同值零 SQL / C <code>AsNoTracking</code> 改属性零 SQL（生产事故级写法）· 答清 Day 53 留题：<code>Set&lt;TEntity&gt;()</code> 是 <code>DbContext</code> <strong>基类</strong>上的泛型方法（非 <code>DbSet</code>），<code>_setCache</code> = <code>Dictionary&lt;Type,object&gt;</code> 实例字段，每 DbContext 独立 · 4 步小阶梯解锁泛型方法（<code>List&lt;T&gt;</code> → <code>OfType&lt;T&gt;()</code> → 自造 <code>Pick&lt;T&gt;</code> → 映射 <code>Set&lt;TEntity&gt;</code>）· 反衬：<code>OnConfiguring</code> 自配置 ≠ DI；DI 版 = 删 <code>OnConfiguring</code> + 构造器接 <code>DbContextOptions&lt;T&gt;</code> + 组合根 <code>AddDbContext</code>（默认 Scoped = 每 HTTP 请求一个 DbContext，落地 Day 24 心法）· 检查题 3 / 0 全对 · 7 个新口诀 #79–85 + cheatsheet 坑 74–76 · Day 55 铺路：接入 <code>TemperatureSensor.Api</code></div>
+</a>
+<a class="card" href="dailyread/dailyread-2026-05-30.html">
+  <div class="date">2026-05-30</div>
+  <div class="title">Day 53 · EF Core 第一条查询 🗄️ — 亲眼看 LINQ 变 SQL</div>
+  <div class="desc">ORM 是关系数据库 ↔ C# 对象的搬运工 · <code>DbContext</code> 三件大事（连接 / 追踪 / SaveChanges）· <code>DbSet&lt;T&gt; : IQueryable&lt;T&gt;</code> 这一行继承就是 LINQ → SQL 的全部秘密 · 关键代码拆解 <code>public DbSet&lt;Reading&gt; Readings =&gt; Set&lt;Reading&gt;();</code> 四片段四身份 · demo 3 大看点：EF 自动建表（<code>decimal</code> → SQLite <code>TEXT</code>）/ 参数化 INSERT 天然防注入 / <code>.Where(r =&gt; r.Celsius &gt; 30m)</code> 翻译成 <code>SELECT ... WHERE ef_compare(...) &gt; 0</code>（18.0 / 22.5 根本没离开数据库）· 5 个新口诀 #74–78（含明日预告：快照对比 snapshot comparison）</div>
+</a>
+<a class="card" href="dailyread/dailyread-2026-05-29-day52.html">
+  <div class="date">2026-05-29 (PM)</div>
   <div class="title">Day 52 · Join + SelectMany + Yield/State Machine + IQueryable 🔘 — Tier-1 LINQ 14 个收官</div>
   <div class="desc">Part 1 <code>Join</code> 5 args / 4 generics / hash join O(N+M) · Part 2 <code>SelectMany</code> 1-arg 拍扁 + 2-arg 父子展开 · Part 3 🪤 CS0579 同目录两个 csproj → SDK 把所有 <code>.cs</code> include 进每个项目 → 修复 = 一 demo 一文件夹 · Part 4 <code>yield return</code> 真相 = 编译器生成 <code>&lt;Demo&gt;d__0</code> 状态机（<code>MoveNext</code>+<code>_state</code> switch，局部变量提升为字段）· Part 5 谁是按按钮的人 🔘 — <code>foreach</code>/<code>ToList</code>/<code>Count</code>/<code>First</code> 按按钮；<code>Where</code>/<code>Select</code>/<code>Join</code> 只再套一层状态机 · Part 6 <code>IQueryable</code> vs <code>IEnumerable</code> —— 同 lambda 两个世界（<code>Func</code> vs <code>Expression Tree</code>，本地过滤 vs DB 翻译 SQL）· 左边静态类型决定走 <code>Enumerable.Where</code> 还是 <code>Queryable.Where</code> · 💣 凶手 <code>.ToList()</code> 在 <code>.Where()</code> 之前拉 10M 行 · 🪤 Repository 返 <code>IEnumerable&lt;T&gt;</code> 砍下游 SQL 能力 · DbContext / DbSet 入门 · 6 个新口诀 #68–73 + cheatsheet 坑 68–73 · Tier-1 LINQ 14 个收官 ✅</div>
 </a>

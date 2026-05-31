@@ -2016,6 +2016,68 @@ if (snapshot.Count &gt; 0) { ... }</code></pre>
 <strong>锚句：</strong>"<strong>类型决定『翻译成什么』，按按钮决定『什么时候执行』。</strong> <code>IEnumerable</code> 和 <code>IQueryable</code> 都是 lazy 的 —— 没人按按钮，SQL 永远不会发出去；按多次，SQL 跑多次。"（口诀 #73）
 </div>
 
+<div class="danger">
+<strong>74. <code>AsNoTracking()</code> 后改属性 → SaveChanges 静默无效（生产事故级）</strong>
+<pre><code>// ❌ 生产事故写法：开发者以为存了，库里啥都没变
+var user = await db.Users.AsNoTracking().FirstAsync(u =&gt; u.Id == id);
+user.Email = newEmail;
+await db.SaveChangesAsync();
+// 真相：AsNoTracking 不拍快照 → ChangeTracker 里没东西 → diff 为空 → 零 SQL
+
+// ✅ 修复 A：只读才用 AsNoTracking
+var user = await db.Users.FirstAsync(u =&gt; u.Id == id);   // 默认追踪
+user.Email = newEmail;
+await db.SaveChangesAsync();                              // UPDATE 自动发
+
+// ✅ 修复 B：必须 AsNoTracking 时，显式 Update
+var user = await db.Users.AsNoTracking().FirstAsync(u =&gt; u.Id == id);
+user.Email = newEmail;
+db.Update(user);                                          // 手动挂回追踪
+await db.SaveChangesAsync();</code></pre>
+<strong>锚句：</strong>"<strong>没快照 = 没 diff = 改了白改。</strong> 反过来：set 同值 = diff 为空 = 也零 SQL（这是优化，不是 bug）。"（口诀 #82 #83）
+</div>
+
+<div class="danger">
+<strong>75. 把 <code>OnConfiguring</code> 留在生产 ASP.NET Core 项目里 ≠ DI</strong>
+<pre><code>// ❌ 学习 demo 风格（自配置，不是 DI）
+public class SensorDbContext : DbContext
+{
+    public DbSet&lt;Reading&gt; Readings =&gt; Set&lt;Reading&gt;();
+    protected override void OnConfiguring(DbContextOptionsBuilder o)
+        =&gt; o.UseSqlite("Data Source=sensor.db");          // 硬编码 + 你自己 new
+}
+// 后果：配置改不了 / 测试换不了内存库 / 生命周期不受容器管
+
+// ✅ 生产 DI 写法
+public class SensorDbContext : DbContext
+{
+    public SensorDbContext(DbContextOptions&lt;SensorDbContext&gt; options)
+        : base(options) { }                                // 构造器接 options
+    public DbSet&lt;Reading&gt; Readings =&gt; Set&lt;Reading&gt;();
+    // 没有 OnConfiguring
+}
+// 组合根（Program.cs）：
+builder.Services.AddDbContext&lt;SensorDbContext&gt;(opts =&gt;
+    opts.UseSqlite(builder.Configuration.GetConnectionString("Db")));
+// 路由按需注入：
+app.MapGet("/readings", (SensorDbContext db) =&gt;
+    db.Readings.AsNoTracking().ToList());
+// 默认 Scoped = 每 HTTP 请求一个 DbContext，请求结束自动 Dispose</code></pre>
+<strong>锚句：</strong>"<code>OnConfiguring</code> = 『DbContext 你自己想办法连库』；<code>AddDbContext</code> = 『容器，请按这个配方造 DbContext，谁要谁拿』。<strong>后者才是 DI。</strong>"（口诀 #85）
+</div>
+
+<div class="danger">
+<strong>76. 误以为 <code>SaveChanges</code> 把所有加载到内存的实体都写回库</strong>
+<pre><code>// ❌ 错误心智模型："只要在内存里改了，SaveChanges 就会同步到库"
+// ✅ 真相：SaveChanges 只写「被追踪 + diff 有变化」的实体
+
+// 三种"看起来加载了但写不回去"的场景：
+db.Readings.AsNoTracking().ToList();        // ① 没追踪
+db.Entry(reading).State = EntityState.Detached;   // ② 显式 detach
+db.Readings.Select(r =&gt; new { r.Id, r.Celsius }).ToList();  // ③ 投影出匿名对象，原实体没追踪</code></pre>
+<strong>锚句：</strong>"<code>SaveChanges</code> 看的是 <strong>ChangeTracker 表里那些</strong>实体的 diff，不是『内存里能看见的所有东西』。"（口诀 #84）
+</div>
+
 <a class="back-top" href="#">↑ 回到顶部</a>
 
 <!-- ============================================================ -->
