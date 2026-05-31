@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>2026-05-31 (PM) · Day 55 · EF Core DI fail-fast + DI 词汇债</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; max-width: 880px; margin: 40px auto; padding: 0 24px 80px; line-height: 1.75; color: #1f2328; background: #fbfbfb; }
+  h1 { border-bottom: 3px solid #cf222e; padding-bottom: 8px; color: #cf222e; }
+  h2 { border-left: 4px solid #cf222e; padding-left: 10px; margin-top: 34px; color: #1f2328; font-size: 1.3em; }
+  h3 { color: #cf222e; margin-top: 22px; font-size: 1.08em; }
+  code { background: #eef2f6; padding: 2px 6px; border-radius: 4px; font-family: "Consolas", monospace; font-size: 0.94em; color: #cf222e; }
+  pre { background: #1f2328; color: #e6edf3; padding: 12px 16px; border-radius: 8px; overflow-x: auto; font-size: 0.86em; }
+  pre code { background: none; color: inherit; padding: 0; }
+  .key { background: #ffebe9; border-left: 4px solid #cf222e; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .note { background: #fff8c5; border-left: 4px solid #d4a72c; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .danger { background: #ffebe9; border-left: 4px solid #cf222e; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .ok-box { background: #dafbe1; border-left: 4px solid #1a7f37; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  a { color: #0969da; text-decoration: none; } a:hover { text-decoration: underline; }
+  .back { font-size: 0.9em; color: #57606a; margin-bottom: 16px; }
+  .meta { color: #57606a; font-size: 0.9em; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 0.95em; }
+  th, td { border: 1px solid #d0d7de; padding: 6px 10px; text-align: left; vertical-align: top; }
+  th { background: #f6f8fa; }
+</style>
+</head>
+<body>
+
+<div class="back"><a href="../dailyread.html">返回首页</a></div>
+
+<h1>EF Core DI fail-fast + DI 词汇债 ⚠️</h1>
+<p class="meta">2026-05-31 (PM) · Day 55 · 配套：<a href="../2026-05-31/EFCore-DI-FailFast-Summary.md">完整 Summary</a> · 上午段 <a href="dailyread-2026-05-31.html">Day 54 ChangeTracking</a></p>
+
+<div class="ok-box">
+<strong>一句话：</strong>「EF Core 的 <code>AddDbContext&lt;T&gt;</code> 是 fail-fast —— 在『注册阶段』就用反射偷看 <code>T</code> 的 ctor 签名，没合规 ctor 立刻炸；普通 <code>AddSingleton&lt;T&gt;</code> 不做这件事 —— 坏 ctor 要等到 <code>GetRequiredService</code> 那一刻才暴露。」实验 A/B 跑通 ✅。但同时暴露了 <strong>DI 词汇债</strong>：mentor 一直说"Add / Build / Resolve"三阶段却从没定义对应哪行代码，学习者据此填空填反 → Day 56 回炉 DI。
+</div>
+
+<h2>实验 A：普通 DI 是 <strong>fail-lazy</strong></h2>
+
+<pre><code>services.AddSingleton&lt;Bomb&gt;();                  // line 6  → ✅ 通过
+var provider = services.BuildServiceProvider(); // line 10 → ✅ 通过
+var b = provider.GetRequiredService&lt;Bomb&gt;();    // line 15 → 💥 Bomb ctor 抛异常</code></pre>
+
+<div class="key">
+<strong>结论：</strong>普通 DI 的 <code>AddSingleton&lt;T&gt;</code> <strong>不查 ctor</strong>、<code>BuildServiceProvider</code> 也不查。<strong>坏 ctor 要到 line 15 真造对象时才暴露。</strong>
+</div>
+
+<h2>实验 B：EF Core 是 <strong>fail-fast</strong>（反射体检）</h2>
+
+<pre><code>services.AddDbContext&lt;SensorDbContext&gt;(opts =&gt;     // line 7
+    opts.UseSqlite("Data Source=expB.db"));
+
+// 跑下来的输出顺序：
+[1] AddDbContext returned. Reflection check passed. ✅
+[2] BuildServiceProvider returned. Still no ctor ran. ✅
+[3] About to call GetRequiredService&lt;SensorDbContext&gt;() ...
+    &gt;&gt;&gt; SensorDbContext ctor is running NOW &lt;&lt;&lt;       ← 在两个 [3] 之间！
+[3] Got SensorDbContext. NOW the ctor really ran. ✅</code></pre>
+
+<div class="key">
+<strong>关键观察：</strong><code>&gt;&gt;&gt; ctor running NOW &lt;&lt;&lt;</code> 出现在 <strong>两个 <code>[3]</code> 中间</strong> —— 说明 EF Core 的体检只是「反射偷看 ctor 签名」，没真的 <code>new</code>；ctor 真正跑还是在 <code>GetRequiredService</code> 那一刻。
+</div>
+
+<h2>对照：坏 DbContext（无 ctor）</h2>
+
+<pre><code>// temp/SensorDbContext.cs.cs  ← 没写构造器
+public class SensorDbContext : DbContext
+{
+    public DbSet&lt;Reading&gt; Readings =&gt; Set&lt;Reading&gt;();
+}
+
+// temp/Program.cs 跑下来：
+[1] About to call AddDbContext&lt;SensorDbContext&gt;(...) ...
+💥 ArgumentException: No suitable constructor was found for entity type 'SensorDbContext'.</code></pre>
+
+<p>line 6 直接炸，line 11 的 <code>GetRequiredService</code> 根本没机会跑 —— 这就是 fail-fast。</p>
+
+<h2>三项目同框对照</h2>
+
+<table>
+<thead><tr><th>项目</th><th>DbContext 有 ctor?</th><th>Add 阶段</th><th>Build 阶段</th><th>Resolve 阶段</th></tr></thead>
+<tbody>
+<tr><td><strong>temp/</strong>（坏）</td><td>❌ 没</td><td>💥 反射体检失败</td><td>跑不到</td><td>跑不到</td></tr>
+<tr><td><strong>ExpA-LazyDI</strong>（普通 Bomb）</td><td>n/a</td><td>✅ 不查</td><td>✅ 不查</td><td>💥 真 new 时抛</td></tr>
+<tr><td><strong>ExpB-EFCoreFastFail</strong>（好）</td><td>✅ 有</td><td>✅ 体检通过</td><td>✅ 懒</td><td>✅ ctor 此刻才跑</td></tr>
+</tbody>
+</table>
+
+<div class="ok-box">
+<strong>口诀：</strong>EF Core <strong>早死</strong>（fail-fast，靠反射） / 普通 DI <strong>晚死</strong>（fail-lazy，靠真造对象）。
+</div>
+
+<h2><code>ctor</code> vs <code>OnConfiguring</code> 谁覆盖谁？（修正版）</h2>
+
+<pre><code>// DbContext 基类伪代码
+internal void OnConfiguringInternal(DbContextOptionsBuilder builder)
+{
+    // ① builder 先被「ctor 传进来的 options」预填
+    builder.UseExistingOptionsFromConstructor(this._optionsFromCtor);
+    // ② 然后调你重写的 OnConfiguring（每次 new 都跑）
+    this.OnConfiguring(builder);
+    // ③ builder.Build() = ctor 设置 + OnConfiguring 设置，后者覆盖前者
+}</code></pre>
+
+<ul>
+<li><code>OnConfiguring</code> <strong>永远会被调</strong> —— 不管你用不用 DI</li>
+<li>ctor 传进来的 options 只是给 builder 的<strong>初值</strong></li>
+<li><code>OnConfiguring</code> 里再 <code>UseXxx(...)</code> 就<strong>覆盖</strong> ctor 的设置</li>
+<li>用 DI 时 → <strong>删掉 <code>OnConfiguring</code></strong>，让 ctor 的 options 不被无声覆盖</li>
+</ul>
+
+<h2>⚠️ 今天暴露的教学债</h2>
+
+<div class="danger">
+<p>mentor 从头到尾用了三个词：<strong>Add / Build / Resolve</strong>。但从来没正经讲过它们分别是哪一行代码：</p>
+<table>
+<thead><tr><th>我说的</th><th>真正对应的代码</th><th>真正做的事</th></tr></thead>
+<tbody>
+<tr><td><strong>Add 阶段</strong></td><td><code>services.AddXxx&lt;T&gt;(...)</code></td><td>往 <code>ServiceCollection</code> 追加一条 <code>ServiceDescriptor</code>（配方），不造对象</td></tr>
+<tr><td><strong>Build 阶段</strong></td><td><code>services.BuildServiceProvider()</code></td><td>把 collection 冻成只读的 <code>ServiceProvider</code>（搭建解析图），还是不造对象</td></tr>
+<tr><td><strong>Resolve 阶段</strong></td><td><code>provider.GetRequiredService&lt;T&gt;()</code></td><td>真正按配方造对象（按 Singleton/Scoped/Transient 决定造一次还是每次造）</td></tr>
+</tbody>
+</table>
+<p><strong>填空错误的真正原因</strong>：不是不懂 DI，是这三个词从来没被正式定义 —— 看起来跟着说，其实在猜。<strong>Day 56 第一件事就是补这块。</strong></p>
+</div>
+
+<h2>口诀 — 5 个新条目（#86–90）</h2>
+
+<table>
+<thead><tr><th>#</th><th>口诀</th></tr></thead>
+<tbody>
+<tr><td>86</td><td>EF Core <code>AddDbContext&lt;T&gt;</code> <strong>fail-fast</strong>：注册时反射偷看 <code>T</code> 的 ctor，没合规 ctor 立刻抛 <code>ArgumentException</code>。</td></tr>
+<tr><td>87</td><td>普通 DI <strong>fail-lazy</strong>：<code>AddXxx</code> 只追加配方、<code>BuildServiceProvider</code> 只搭图，ctor 真正跑（也才能抛）在 <code>GetRequiredService</code>。</td></tr>
+<tr><td>88</td><td><code>DbContextOptions&lt;TContext&gt;</code> 的泛型参数是 <strong>幻影类型参数（phantom type parameter）</strong>，纯粹做"哪个 DbContext 的 options"的类型区分。</td></tr>
+<tr><td>89</td><td><code>OnConfiguring</code> <strong>永远会被调</strong>，且在 ctor options 之<strong>后</strong>跑会覆盖前面的设置 —— DI 路径上必须删它。</td></tr>
+<tr><td>90</td><td>"反射偷看签名"比"真造对象"<strong>便宜得多</strong>，所以 EF Core 把它放在最早的注册阶段当门卫，宁可早死也不让坏 DbContext 进入运行时。</td></tr>
+</tbody>
+</table>
+
+<div class="key">累计口诀 <strong>90</strong> 条。</div>
+
+<h2>💀 今天反复踩的坑（追加到 cheatsheet 77–78）</h2>
+
+<div class="danger">
+<strong>坑 77：</strong>把"反射体检"和"真造对象"混为一谈。把"反射"听成"晚一点 / 慢一点"，于是误以为反射检查发生在 Resolve 阶段。<strong>真相反过来</strong>：反射只是读 metadata，便宜到可以放在最早的 Add 阶段当门卫。EF Core 就是这么干的。
+</div>
+
+<div class="danger">
+<strong>坑 78：</strong>用未定义的抽象词汇教学 = 看起来懂了，其实只是跟着说。教学修复原则：<strong>任何抽象阶段词，必须先 map 到一行可点的代码</strong>。
+</div>
+
+<h2>📂 今天产出文件</h2>
+
+<pre><code>2026-05-31/
+  DI-DbContext-Drill/           ← 早段 drill（含正确 ctor 的参考实现）
+  ExpA-LazyDI/Program.cs        ← 普通 Bomb，证明 fail-lazy
+  ExpB-EFCoreFastFail/Program.cs ← 好 DbContext，证明反射体检 + 懒 new
+  temp/                         ← 坏 DbContext（无 ctor）反衬 fail-fast
+  EFCore-DI-FailFast-Summary.md ← 完整 Summary</code></pre>
+
+<h2>🅿️ Day 56 Resume Point — DI 从零回炉</h2>
+
+<ol>
+<li><strong><code>ServiceCollection</code> 到底是什么？</strong> —— 拆开看它是 <code>IList&lt;ServiceDescriptor&gt;</code>，"注册"就是 Add 一条 descriptor。</li>
+<li><strong><code>ServiceDescriptor</code> 是什么？</strong> —— <code>(ServiceType, ImplementationType, Lifetime, Factory?)</code> 四元组。</li>
+<li><strong><code>BuildServiceProvider()</code> 在做什么？</strong> —— 把 collection 冻结成只读 <code>ServiceProvider</code>；分析依赖图但不 new。</li>
+<li><strong><code>GetRequiredService&lt;T&gt;()</code> 在做什么？</strong> —— 按 descriptor 真造对象；Singleton 缓存第一次，Scoped 在 scope 内缓存，Transient 每次新建。</li>
+<li>回到今天的 ExpA / ExpB，用新词汇重新表述"为什么 EF Core fail-fast、普通 DI fail-lazy"。</li>
+<li>如果还有时间：Path 2 = <code>TemperatureSensor.Api</code> 接入 <code>AddDbContext</code>，跑通昨天的集成测试。</li>
+</ol>
+
+<h2>🏁 Today's One-Line Win</h2>
+
+<div class="ok-box">
+<strong>「跑通了 fail-fast vs fail-lazy 的对照实验，但更大的收获是：发现自己在用一套没被定义清楚的 DI 词汇 —— 这种『看起来跟得上、其实在猜』的状态被一道填空题诚实地暴露了。明天补它。」</strong>
+</div>
+
+</body>
+</html>
